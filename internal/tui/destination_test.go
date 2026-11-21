@@ -26,9 +26,10 @@ func TestDestinationBrowserCanCancelOrChooseSubfolder(t *testing.T) {
 		t.Fatal("cancelling lost the library selection or history")
 	}
 	m = press(m, "c", "down", "down", "right", "u")
-	if m.screen != screenSources || m.eng.Root() != filepath.Join(root, "Subfolder") {
+	if m.screen != screenLibrary || !m.library.scanning || m.eng.Root() != filepath.Join(root, "Subfolder") {
 		t.Fatalf("subfolder not chosen: %s", m.eng.Root())
 	}
+	m.library.cancel()
 	if _, err := os.Stat(filepath.Join(root, "data.music")); err != nil {
 		t.Fatal("changing destination changed the previous library")
 	}

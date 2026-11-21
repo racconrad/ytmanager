@@ -16,7 +16,11 @@ func (m model) readingActivity(w int) string {
 	}
 	elapsed := max(time.Duration(0), time.Since(m.run.readingSince)).Truncate(time.Second)
 	frame := []string{"|", "/", "-", "\\"}[m.cat.frame%4]
-	label := fmt.Sprintf("%s Reading link · %s", frame, elapsed)
+	what := "Reading link"
+	if m.run.verb == "repaired" || m.run.verb == "exported" {
+		what = "Checking library files"
+	}
+	label := fmt.Sprintf("%s %s · %s", frame, what, elapsed)
 	if elapsed >= 30*time.Second {
 		label = fmt.Sprintf("%s Still waiting · %s", frame, elapsed)
 	}

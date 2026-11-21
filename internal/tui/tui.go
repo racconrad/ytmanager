@@ -7,6 +7,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -26,6 +27,8 @@ const (
 	screenSettings               // download settings
 	screenLibrary                // search and manage downloaded music
 	screenMissing                // unavailable tracks and their alternatives
+	screenCollection
+	screenArtist
 )
 
 // prompt is what the text input is asking for; promptNone means it is hidden.
@@ -37,21 +40,32 @@ const (
 	promptMkdir
 	promptURLs
 	promptAlt
+	promptArtist
 )
 
 type model struct {
-	opt     engine.Options
-	format  string // -format flag, applied to every destination opened
-	screen  screen
-	eng     *engine.Engine // nil on screenDevices and screenBrowse
-	cursor  int
-	library libraryState
+	opt        engine.Options
+	format     string // -format flag, applied to every destination opened
+	screen     screen
+	eng        *engine.Engine // nil on screenDevices and screenBrowse
+	cursor     int
+	library    libraryState
+	collection collectionState
+	artist     artistState
+	covers     coverState
+	overlay    *coverOverlay
+	nextCover  *coverPlacement
 
-	mounts        []device.Mount
-	browse        string // folder shown in screenBrowse
-	dirs          []string
-	browseReturn  bool
-	libraryCursor int
+	mounts         []device.Mount
+	browse         string // folder shown in screenBrowse
+	dirs           []string
+	browseReturn   bool
+	browseFrom     screen
+	browseCursor   int
+	settingsFrom   screen
+	settingsCursor int
+	shortcutHelp   bool
+	shortcutCursor int
 
 	input  textinput.Model
 	prompt prompt
@@ -93,6 +107,8 @@ type job struct {
 	sourceID, sourceTitle string
 	title                 string
 	pct                   float64
+	stage                 string
+	hasProgress           bool
 }
 
 type (
@@ -124,60 +140,216 @@ func Run(dest string, opt engine.Options, format string) error {
 	in := textinput.New()
 	in.Prompt = hi.Render("› ")
 	in.CharLimit = 4096
+	overlay := newCoverOverlay(os.Stdout)
+	defer overlay.close()
 	m := model{
 		opt: opt, format: format, input: in, width: 80, height: 24,
-		bar:    progress.New(progress.WithGradient("#7c3aed", "#f0abfc"), progress.WithWidth(24)),
-		marked: map[string]bool{}, run: run{jobs: map[string]*job{}},
+		bar:     progress.New(progress.WithGradient("#7c3aed", "#f0abfc"), progress.WithWidth(24)),
+		marked:  map[string]bool{},
+		run:     run{jobs: map[string]*job{}},
+		overlay: overlay,
 	}
 	if dest != "" {
 		if err := m.openDest(dest); err != nil {
 			return err
 		}
+		m.screen = screenLibrary
 	} else {
 		m.mounts = device.List()
 	}
-	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(overlay)).Run()
 	if fm, ok := final.(model); ok && fm.run.cancel != nil {
 		fm.run.cancel()
+	}
+	if fm, ok := final.(model); ok && fm.library.cancel != nil {
+		fm.library.cancel()
 	}
 	return err
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(catTick(), detect(0, m.watched(), ""))
+	var initial tea.Cmd
+	if m.screen == screenLibrary && m.eng != nil {
+		initial = func() tea.Msg { return startLibraryMsg{m.eng} }
+	}
+	return tea.Batch(catTick(), detect(0, m.watched(), ""), initial)
 }
+func (m model) viewSignature() string {
+	return fmt.Sprintf("%d:%v:%v:%v:%v:%v:%v:%v:%v:%v:%v:%v",
+		m.screen,
+		m.artist.searching, m.artist.loading, m.artist.artist != nil,
+		m.library.tools, m.library.plan != nil, m.library.details != nil, m.library.report != nil, m.library.candidates != nil, m.library.albums,
+		m.shortcutHelp,
+		m.libraryOverlayVisible(),
+	)
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prevSig := m.viewSignature()
+	nextModel, cmd := m.updateInner(msg)
+	if nm, ok := nextModel.(model); ok && nm.overlay != nil && nm.viewSignature() != prevSig {
+		return nm, tea.Batch(cmd, tea.ClearScreen)
+	}
+	return nextModel, cmd
+}
+
+func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case startLibraryMsg:
+		if m.screen == screenLibrary && msg.eng == m.eng && !m.library.scanning {
+			cmd := m.openInitialLibrary()
+			return m, cmd
+		}
+		return m, nil
 	case libraryScannedMsg:
+		if msg.eng == m.eng && m.library.scanning {
+			if m.screen != screenLibrary {
+				cursor := m.cursor
+				m.cursor = m.library.catalogCursor
+				m.finishLibraryScan(msg)
+				m.library.catalogCursor, m.cursor = m.cursor, cursor
+				return m, nil
+			}
+			m.finishLibraryScan(msg)
+			if m.library.settingsAction != "" {
+				action := m.library.settingsAction
+				m.library.settingsAction = ""
+				if msg.err == nil && (action == "organize" || action == "convert") {
+					m.library.tools = true
+					if action == "organize" {
+						m.library.layout = m.opt.Folders
+					}
+					if action == "convert" {
+						m.library.targetFormat = m.eng.Format()
+					}
+				}
+			}
+			if msg.err == nil && m.screen == screenLibrary && !m.library.tools {
+				cmd := m.requestCover(m.libraryCoverKey())
+				return m, cmd
+			}
+		}
+		return m, nil
+	case libraryPlannedMsg:
 		if msg.eng == m.eng {
-			m.library.scanning = false
-			m.library.cancel = nil
-			m.library.all = msg.tracks
-			m.library.marked = map[string]bool{}
-			m.cursor = 0
+			if m.library.cancel != nil {
+				m.library.cancel()
+			}
+			m.library.cancel, m.library.busy = nil, false
 			if msg.err != nil {
 				m.fail(msg.err)
+			} else {
+				m.library.plan = &msg.plan
+				m.library.tools = false
+				m.cursor = 0
 			}
-			m.log(fmt.Sprintf("Scanned %d audio files. External files are review-only.", len(msg.tracks)))
 		}
 		return m, nil
 	case libraryDeletedMsg:
 		if msg.eng == m.eng {
+			if msg.err != nil {
+				msg.report.Items = append(msg.report.Items, engine.FileResult{Outcome: "Operation error", Error: msg.err.Error()})
+			}
+			if msg.scanErr != nil {
+				msg.report.Items = append(msg.report.Items, engine.FileResult{Outcome: "Folder scan incomplete", Error: msg.scanErr.Error()})
+			}
+			if m.library.cancel != nil {
+				m.library.cancel()
+			}
+			m.library.cancel = nil
 			m.library.busy = false
-			m.library.all = msg.tracks
+			m.library.complete = msg.scanErr == nil
+			if m.library.complete {
+				m.library.all, m.library.inventoryKnown = msg.tracks, true
+				m.library.scanNotice = ""
+			} else {
+				m.library.scanNotice = "Scan incomplete"
+			}
+			m.library.report = &msg.report
 			m.library.marked = map[string]bool{}
 			m.cursor = 0
-			m.log(fmt.Sprintf("Deleted %d track(s).", msg.count))
+			m.log(msg.report.Summary())
 			if msg.err != nil {
 				m.fail(msg.err)
 			}
 		}
 		return m, nil
+	case coverOpenedMsg:
+		if msg.err != nil && (m.screen == screenCollection || m.screen == screenArtist) {
+			m.fail(fmt.Errorf("could not open cover: %w", msg.err))
+		}
+		return m, nil
+	case coverLoadedMsg:
+		m.storeCover(msg)
+		return m, nil
+	case artistSearchMsg:
+		if m.screen != screenArtist || m.artist.query != msg.query {
+			return m, nil
+		}
+		m.artist.searching = false
+		if msg.err != nil {
+			m.artist.err = msg.err.Error()
+			return m, nil
+		}
+		m.artist.results = msg.results
+		m.cursor = 0
+		if len(msg.results) == 1 {
+			return m, m.openArtistQuery(msg.results[0].URL)
+		}
+		return m, m.requestCover(m.artistHighlightedCover())
+	case artistLoadedMsg:
+		if m.screen != screenArtist {
+			return m, nil
+		}
+		m.artist.searching = false
+		m.artist.loading = false
+		if msg.err != nil {
+			m.artist.err = msg.err.Error()
+			return m, nil
+		}
+		m.artist.artist = msg.artist
+		m.artist.tab = 0
+		m.cursor = 0
+		return m, m.requestCover(m.artistHighlightedCover())
+	case inspectLoadedMsg:
+		if msg.eng == nil || msg.eng != m.eng {
+			return m, nil
+		}
+		m.artist.inspecting = false
+		if msg.from != m.screen {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.fail(msg.err)
+			return m, nil
+		}
+		if msg.save {
+			id, err := m.eng.SaveSourceMetadata(msg.listing, msg.url)
+			if err != nil {
+				m.fail(err)
+				return m, nil
+			}
+			m.log(ok.Render("Saved metadata: " + msg.listing.Title))
+			m.collection = collectionState{id: id, sourceCursor: m.cursor, returnTo: m.screen}
+			return m, m.requestCover(msg.listing.Cover)
+		}
+		m.collection = collectionState{
+			preview:      msg.listing,
+			previewURL:   msg.url,
+			sourceCursor: m.cursor,
+			returnTo:     m.screen,
+		}
+		m.screen, m.cursor = screenCollection, 0
+		return m, m.requestCover(msg.listing.Cover)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.bar.Width = max(10, min(30, msg.Width/4))
 		m.input.Width = max(1, msg.Width-6)
 		m.scrollLogs(0)
+		if m.screen == screenLibrary {
+			cmd := m.requestCover(m.libraryCoverKey())
+			return m, cmd
+		}
 	case tea.MouseMsg:
 		return m.mouse(msg)
 	case catTickMsg:
@@ -231,9 +403,16 @@ func (m *model) openDest(p string) error {
 			return err
 		}
 	}
+	if m.library.cancel != nil {
+		m.library.cancel()
+	}
 	m.eng, m.screen, m.cursor, m.logs = eng, screenSources, 0, nil
 	m.logScroll = 0
+	m.shortcutHelp = false
 	m.library = libraryState{}
+	m.marked = map[string]bool{}
+	m.artist = artistState{}
+	m.collection = collectionState{}
 	m.browseReturn = false
 	m.space, err = device.Space(eng.Root())
 	m.spaceKnown = err == nil
@@ -241,10 +420,12 @@ func (m *model) openDest(p string) error {
 	return nil
 }
 
-func (m *model) use(p string) {
+func (m *model) use(p string) tea.Cmd {
 	if err := m.openDest(p); err != nil {
 		m.fail(err)
+		return nil
 	}
+	return m.openInitialLibrary()
 }
 func (m *model) log(s string) {
 	if m.logScroll > 0 {

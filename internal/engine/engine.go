@@ -6,12 +6,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"ytmanager/internal/device"
 	"ytmanager/internal/manifest"
 	"ytmanager/internal/ytdlp"
-	"ytmanager/internal/ytmusic"
 )
 
 type Options struct {
@@ -33,6 +35,7 @@ const (
 	EvReading     EventKind = "reading" // ID is the source URL
 	EvReadDone    EventKind = "read_done"
 	EvStart       EventKind = "start"
+	EvStage       EventKind = "stage"
 	EvProgress    EventKind = "progress"    // Pct of the current track, 0..1
 	EvStopped     EventKind = "stopped"     // a track was interrupted by pause or cancel; it stays pending
 	EvDone        EventKind = "done"        // Msg is the lyrics kind found, if any
@@ -51,8 +54,8 @@ type Event struct {
 }
 
 type SourceView struct {
-	ID, Type, Title, URL, Creator     string
-	Done, Total, Unavailable, Removed int
+	ID, Type, Title, URL, Creator, Cover, Year string
+	Done, Total, Unavailable, Removed          int
 }
 
 // MissingView is an unavailable track plus the first source it appears in.
@@ -68,18 +71,30 @@ type Engine struct {
 	gate *gate
 
 	// set while a download or sync runs; Add persists requests and wakes the scheduler
-	running     bool
-	accepting   bool
-	more        chan struct{}
-	spaceCheck  func(string, uint64) error                                    // nil uses live storage checks
-	listSource  func(context.Context, string, string) (*ytdlp.Listing, error) // nil uses yt-dlp
-	trackWork   func(context.Context, string, func(Event)) bool               // nil downloads normally
-	resolveSong func(context.Context, string) (string, error)                 // nil uses YouTube Music
+	running       bool
+	accepting     bool
+	more          chan struct{}
+	spaceCheck    func(string, uint64) error                                    // nil uses live storage checks
+	listSource    func(context.Context, string, string) (*ytdlp.Listing, error) // nil uses yt-dlp
+	trackWork     func(context.Context, string, func(Event)) bool               // nil downloads normally
+	resolveSong   func(context.Context, string) (string, error)                 // nil uses YouTube Music
+	providers     map[string]TrackProvider
+	physicalIndex map[string][]string // embedded source IDs, cached for one sync
+	presence      map[string]bool     // refreshed by scans and operations, never poll USB in each render
+	scanDone      atomic.Int64
+	scanTotal     atomic.Int64
 }
 
 // Open loads (or creates) the destination at root, which may be ~/… or an mtp:// URI.
 func Open(root string, opt Options) (*Engine, error) {
 	root, err := device.Resolve(root)
+	if err != nil {
+		return nil, err
+	}
+	if root == "" {
+		return nil, fmt.Errorf("missing destination path")
+	}
+	root, err = filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +106,7 @@ func Open(root string, opt Options) (*Engine, error) {
 		return nil, err
 	}
 	e := &Engine{m: m, gate: newGate()}
+	e.providers = e.defaultProviders()
 	e.SetOptions(opt)
 	return e, nil
 }
@@ -118,9 +134,19 @@ func (e *Engine) Snapshot() []SourceView {
 	defer e.mu.Unlock()
 	out := make([]SourceView, len(e.m.Sources))
 	for i, s := range e.m.Sources {
-		d, t, u := e.m.Count(s)
+		d, t, u := 0, len(s.Tracks), 0
+		for _, id := range s.Tracks {
+			if track := e.m.Tracks[id]; track != nil {
+				if track.Status == manifest.StatusDone && e.trackPresent(track) {
+					d++
+				}
+				if track.Status == manifest.StatusUnavailable {
+					u++
+				}
+			}
+		}
 		out[i] = SourceView{ID: s.ID, Type: s.Type, Title: s.Title, URL: s.URL, Creator: s.Creator,
-			Done: d, Total: t, Unavailable: u}
+			Cover: s.Cover, Year: s.Year, Done: d, Total: t, Unavailable: u}
 		for _, id := range s.Tracks {
 			if track := e.m.Tracks[id]; track != nil && track.Status == manifest.StatusRemoved {
 				out[i].Removed++
@@ -128,6 +154,19 @@ func (e *Engine) Snapshot() []SourceView {
 		}
 	}
 	return out
+}
+
+// trackPresent caches filesystem presence between explicit operations.
+func (e *Engine) trackPresent(t *manifest.Track) bool {
+	if e.presence == nil {
+		e.presence = map[string]bool{}
+	}
+	if present, ok := e.presence[t.Path]; ok {
+		return present
+	}
+	present := e.m.AudioPath(t) != ""
+	e.presence[t.Path] = present
+	return present
 }
 
 // Missing lists unavailable tracks in source order.
@@ -138,7 +177,7 @@ func (e *Engine) Missing() []MissingView {
 	var out []MissingView
 	for _, s := range e.m.Sources {
 		for _, id := range s.Tracks {
-			if t := e.m.Tracks[id]; (t.Status == manifest.StatusUnavailable || (t.Status == manifest.StatusFailed && t.Error == ytmusic.ErrNoSong.Error())) && !seen[id] {
+			if t := e.m.Tracks[id]; (t.Status == manifest.StatusUnavailable || (t.Status == manifest.StatusFailed && e.isAlternativeError(t.Error))) && !seen[id] {
 				seen[id] = true
 				out = append(out, MissingView{id, t.Title, s.Title, s.URL, t.Alt, t.Error})
 			}
@@ -155,6 +194,9 @@ func (e *Engine) SetAlt(ctx context.Context, id, url string) (string, error) {
 	e.mu.Unlock()
 	if t == nil {
 		return "", fmt.Errorf("track %s does not exist", id)
+	}
+	if ytdlp.Provider(url) != ytdlp.YouTube {
+		return "", fmt.Errorf("use a YouTube Music link for the alternative")
 	}
 	l, err := ytdlp.List(ctx, url, e.opt.Cookies)
 	if err != nil {
@@ -179,7 +221,7 @@ func (e *Engine) Reorganize() (int, error) {
 	defer e.mu.Unlock()
 	n := 0
 	for _, t := range e.m.Tracks {
-		if t.Status == manifest.StatusDone {
+		if t.Status == manifest.StatusDone && !t.Local {
 			t.Status = manifest.StatusPending
 			n++
 		}
@@ -200,11 +242,35 @@ func (e *Engine) Retry(id string) error {
 func (e *Engine) Remove(id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.running {
+		return fmt.Errorf("wait for the current operation to finish")
+	}
+	previousSources := append([]*manifest.Source(nil), e.m.Sources...)
+	previousQueue := append([]manifest.SourceRequest(nil), e.m.Queue...)
+	var legacyPaths []string
 	if source := e.m.Source(id); source != nil {
 		e.completeRequest(source.URL)
+		legacy := e.m.PlaylistText(source, false)
+		path := filepath.Join(e.m.Root, manifest.SafeName(source.Title)+".m3u8")
+		if data, err := os.ReadFile(path); err == nil && string(data) == legacy {
+			legacyPaths = append(legacyPaths, path)
+		}
+		export := strings.TrimSuffix(path, ".m3u8") + ".m3u"
+		if data, err := os.ReadFile(export); err == nil && string(data) == manifest.ExportMarker+strings.TrimPrefix(legacy, "#EXTM3U\n") {
+			legacyPaths = append(legacyPaths, export)
+		}
 	}
 	e.m.Remove(id)
-	return e.m.Save()
+	if err := e.m.Save(); err != nil {
+		e.m.Sources, e.m.Queue = previousSources, previousQueue
+		return err
+	}
+	for _, p := range legacyPaths {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return e.m.WritePlaylists()
 }
 
 func Human(b uint64) string {

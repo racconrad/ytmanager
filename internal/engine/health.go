@@ -2,7 +2,7 @@ package engine
 
 import "ytmanager/internal/manifest"
 
-type Health struct{ Done, Pending, Failed, Unavailable, Removed int }
+type Health struct{ Done, Pending, Failed, Unavailable, Removed, Missing int }
 
 func (e *Engine) Health() Health {
 	e.mu.Lock()
@@ -11,7 +11,11 @@ func (e *Engine) Health() Health {
 	for _, t := range e.m.Tracks {
 		switch t.Status {
 		case manifest.StatusDone:
-			h.Done++
+			if !e.trackPresent(t) {
+				h.Missing++
+			} else {
+				h.Done++
+			}
 		case manifest.StatusPending:
 			h.Pending++
 		case manifest.StatusFailed:

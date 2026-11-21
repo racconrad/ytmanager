@@ -24,7 +24,7 @@ func libraryModel(t *testing.T) model {
 	for id, tr := range data.Tracks {
 		tr.Path = id + ".opus"
 		tr.Status = manifest.StatusDone
-		if err := os.WriteFile(filepath.Join(root, tr.Path), []byte("audio"), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, tr.Path), []byte("audio-"+id), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -35,7 +35,13 @@ func libraryModel(t *testing.T) model {
 	if err := m.openDest(root); err != nil {
 		t.Fatal(err)
 	}
-	return press(m, "l")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("library did not scan on entry")
+	}
+	next, _ = m.Update(cmd())
+	return press(next.(model), "b")
 }
 
 func TestLibrarySearchCancelAndFilteredDeletion(t *testing.T) {
@@ -113,6 +119,7 @@ func TestLibraryConfirmationScrollsWithLogsAtMinimumSize(t *testing.T) {
 		m.library.all = append(m.library.all, engine.LibraryTrack{ID: fmt.Sprint(i), Title: fmt.Sprintf("Track %02d", i), Path: fmt.Sprintf("%02d.opus", i)})
 	}
 	m.log("Earlier download message")
+	logCount := len(m.logs)
 	m = press(m, "a", "d")
 	for _, key := range []string{"down", "end", "home"} {
 		m = press(m, key)
@@ -124,13 +131,106 @@ func TestLibraryConfirmationScrollsWithLogsAtMinimumSize(t *testing.T) {
 				row = r
 			}
 		}
-		for _, want := range []string{row.Title, row.Path, "No undo.", "Skipped by future syncs.", "esc cancel"} {
+		for _, want := range []string{row.Title, row.Path, "u restores.", "Skipped by future syncs.", "esc cancel"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("missing %q at %s:\n%s", want, key, view)
 			}
 		}
 	}
-	if len(m.logs) != 1 {
+	if len(m.logs) != logCount {
 		t.Fatal("confirmation discarded logs")
+	}
+}
+
+func TestAlbumReviewProtectsSharedTracksAndCanIncludeThem(t *testing.T) {
+	m := libraryModel(t)
+	for i := range m.library.all {
+		m.library.all[i].Album = "Album"
+		m.library.all[i].Artist = "Artist"
+		m.library.all[i].References = 2
+	}
+	m = press(m, "b", "d")
+	if len(m.library.candidates) != 3 || len(m.library.confirm) != 0 {
+		t.Fatalf("shared tracks not excluded: %+v", m.library)
+	}
+	m = press(m, "h")
+	if len(m.library.confirm) != 3 {
+		t.Fatal("cannot explicitly include shared tracks")
+	}
+	m = press(m, "esc", "enter")
+	if m.library.album == "" || len(m.libraryRows()) != 3 {
+		t.Fatal("album navigation failed")
+	}
+	m = press(m, "esc")
+	if m.library.album != "" || m.screen != screenLibrary {
+		t.Fatal("album back failed")
+	}
+}
+
+func TestLibraryMutationKeepsExternalInventoryAndReportsPhysicalCounts(t *testing.T) {
+	m := libraryModel(t)
+	external := filepath.Join(m.eng.Root(), "external.opus")
+	os.WriteFile(external, []byte("external"), 0600)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = next.(model)
+	next, _ = m.Update(cmd())
+	m = next.(model)
+	m = press(m, "/", "Other", "enter", "d")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(cmd())
+	m = next.(model)
+	if m.library.report == nil || m.library.report.Deleted != 1 {
+		t.Fatal("no physical deletion report")
+	}
+	found := false
+	for _, r := range m.library.all {
+		if r.Path == "external.opus" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("external files disappeared after managed deletion")
+	}
+	m = press(m, "esc", "/")
+	m.input.SetValue("external")
+	m = press(m, "enter", "o")
+	if len(m.libraryRows()) != 1 {
+		t.Fatal("cleanup filter missed unlisted external audio")
+	}
+	m = press(m, "d", "esc")
+	if _, err := os.Stat(external); err != nil {
+		t.Fatal("cancel deleted external audio")
+	}
+}
+
+func TestLibraryToolsAndReportsFitSmallTerminals(t *testing.T) {
+	m := libraryModel(t)
+	for _, size := range [][2]int{{30, 12}, {48, 18}, {80, 24}} {
+		m.width, m.height = size[0], size[1]
+		report := engine.FileReport{Items: []engine.FileResult{{Path: strings.Repeat("very/long/", 15), Outcome: "failed", Error: "disk full"}}}
+		plan := engine.LibraryPlan{Changes: []engine.LibraryChange{{Track: m.library.all[0], To: strings.Repeat("new/folder/", 10)}}}
+		states := []model{press(m, "?"), press(m, "t"), press(m, "i"), press(m, "u"), press(m, "X")}
+		state := m
+		state.library.report = &report
+		states = append(states, state)
+		state = m
+		state.library.plan = &plan
+		states = append(states, state)
+		for _, state := range states {
+			view := state.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) > m.height {
+				t.Fatal("view too tall")
+			}
+			for _, line := range lines {
+				if ansi.StringWidth(line) > m.width {
+					t.Fatal("view too wide")
+				}
+			}
+			if !strings.Contains(ansi.Strip(view), "esc") {
+				t.Fatalf("missing exit at %v: %s", size, view)
+			}
+		}
 	}
 }

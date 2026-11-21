@@ -65,6 +65,10 @@ func (m *model) unplugged(p string) {
 		m.run.cancel()
 	}
 	m.run = run{jobs: map[string]*job{}} // detach: the cancelled run's messages are now stale
+	if m.library.cancel != nil {
+		m.library.cancel()
+		m.library.cancel = nil
+	}
 	m.eng, m.screen, m.cursor, m.prompt = nil, screenDevices, 0, promptNone
 	m.browseReturn, m.spaceKnown = false, false
 	m.marked = map[string]bool{}
@@ -76,7 +80,7 @@ func (m *model) unplugged(p string) {
 // It only acts from the device screens, so it never replaces a destination the user opened since.
 func (m *model) reconnect() tea.Cmd {
 	l := m.lost
-	if m.eng != nil {
+	if l == nil || m.eng != nil {
 		return nil
 	}
 	if err := m.openDest(l.path); err != nil {
@@ -85,7 +89,7 @@ func (m *model) reconnect() tea.Cmd {
 	m.lost = nil
 	m.log(ok.Render("✓ " + device.Label(l.path) + " is back."))
 	if len(l.urls) == 0 && !m.eng.HasPending() {
-		return nil
+		return m.openInitialLibrary()
 	}
 	m.log(dim.Render("Resuming the download…"))
 	return m.download(l.urls)

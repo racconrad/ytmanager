@@ -6,6 +6,9 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
+	if m.shortcutHelp {
+		return m.shortcutKey(k), nil
+	}
 	if m.run.busy && (m.run.verb == "repaired" || m.run.verb == "exported") {
 		if k.String() == "x" {
 			m.run.cancel()
@@ -21,6 +24,16 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.prompt != promptNone {
 		return m.promptKey(k)
+	}
+	if !k.Paste && k.String() == "?" {
+		m.shortcutHelp, m.shortcutCursor = true, 0
+		return m, nil
+	}
+	if m.screen == screenCollection {
+		return m.collectionKey(k)
+	}
+	if m.screen == screenArtist {
+		return m.artistKey(k)
 	}
 	if k.Paste {
 		cmd := m.paste(string(k.Runes))
@@ -61,7 +74,7 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) paste(text string) tea.Cmd {
 	switch m.screen {
 	case screenDevices, screenBrowse:
-		m.use(trim(text))
+		return m.use(trim(text))
 	case screenSources:
 		return m.add(fields(text))
 	case screenMissing:
@@ -96,18 +109,23 @@ func (m model) promptKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.prompt = promptNone
 	m.input.Reset()
 	if v == "" {
+		if p == promptArtist {
+			return m, m.openSavedArtists()
+		}
 		return m, nil
 	}
 	var cmd tea.Cmd
 	switch p {
 	case promptPath:
-		m.use(v)
+		cmd = m.use(v)
 	case promptMkdir:
 		m.mkdir(v)
 	case promptURLs:
 		cmd = m.add(fields(v))
 	case promptAlt:
 		cmd = m.setAlt(m.altFor, v)
+	case promptArtist:
+		cmd = m.openArtistQuery(v)
 	}
 	return m, cmd
 }

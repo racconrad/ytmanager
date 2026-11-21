@@ -3,12 +3,14 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"ytmanager/internal/device"
 	"ytmanager/internal/engine"
+	"ytmanager/internal/ytdlp"
 )
 
 var (
@@ -34,7 +36,21 @@ func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.marked[id] = !m.marked[id]
 		}
 	case "a":
-		cmd = m.ask(promptURLs, "paste YouTube / YT Music links separated by spaces", "")
+		cmd = m.ask(promptURLs, "Paste YouTube, SoundCloud or Bandcamp links", "")
+	case "f":
+		cmd = m.ask(promptArtist, "Artist name, link, or Enter for downloaded artists", "")
+	case "F":
+		if len(srcs) > 0 && srcs[m.cursor].Creator != "" {
+			cmd = m.openArtistQuery(srcs[m.cursor].Creator)
+		} else {
+			cmd = m.openSavedArtists()
+		}
+	case "v":
+		if len(srcs) > 0 {
+			m.collection = collectionState{id: srcs[m.cursor].ID, sourceCursor: m.cursor, returnTo: screenSources}
+			m.screen, m.cursor = screenCollection, 0
+			cmd = m.requestCover(srcs[m.cursor].Cover)
+		}
 	case "enter":
 		if !m.run.busy && (len(srcs) > 0 || m.eng.HasPending()) {
 			cmd = m.download(m.pickedURLs(srcs))
@@ -59,21 +75,33 @@ func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.log(dim.Render("Cancelling…"))
 		}
 	case "d":
+		if m.library.scanning {
+			m.log("Wait for the folder scan to stop.")
+			break
+		}
 		if !m.run.busy && len(srcs) > 0 {
-			if err := m.eng.Remove(srcs[m.cursor].ID); err != nil {
-				m.fail(err)
-			}
-			m.cursor = max(0, min(m.cursor, len(srcs)-2))
+			m.library = libraryState{removeSource: &srcs[m.cursor]}
+			m.screen, m.cursor = screenLibrary, 0
 		}
 	case "l":
 		if m.run.busy {
 			m.log(dim.Render("Wait for downloads to finish or cancel them before managing music."))
 			break
 		}
-		m.library = libraryState{all: m.eng.Library(), marked: map[string]bool{}}
-		m.screen, m.cursor = screenLibrary, 0
+		cmd = m.resumeLibrary()
+	case "D":
+		if m.library.scanning {
+			m.log("Wait for the folder scan to stop.")
+			break
+		}
+		if !m.run.busy && len(srcs) > 0 {
+			ids := m.eng.SourceTrackIDs(srcs[m.cursor].ID)
+			cmd = m.openLibrary("")
+			m.library.sourceTracks = ids
+			m.library.albums = true
+		}
 	case "o":
-		m.screen, m.cursor = screenSettings, 0
+		m.openSettings()
 	case "n":
 		m.screen, m.cursor = screenMissing, 0
 	case "c", "esc", "backspace":
@@ -102,12 +130,50 @@ func (m model) sourcesView(b *strings.Builder, w int) {
 	if m.opt.Cookies != "" {
 		info += " · cookies " + m.opt.Cookies
 	}
-	b.WriteString(logo.Render("ytmanager") + " " + cutLeft(device.Label(m.eng.Root()), max(10, w-35)) + dim.Render(info) + "\n")
-	b.WriteString(m.spaceView(w) + "\n")
-	if m.terminalHeight() >= 24 {
-		b.WriteString("\n" + hi.Render("SOURCES") + "\n")
+	b.WriteString(hi.Render("Sources") + "\n")
+	dest := "Folder: " + destinationLabel(m.eng.Root(), max(1, w-8))
+	if ansi.StringWidth(dest+info) <= w {
+		dest += info
+	}
+	b.WriteString(dim.Render(dest) + "\n")
+	if m.terminalHeight() >= 23 || (m.spaceKnown && m.space.Available < device.SpaceReserve) {
+		b.WriteString(m.spaceView(w) + "\n")
+	}
+	if m.terminalHeight() >= 30 && !m.run.busy {
+		h := m.eng.Health()
+		if h.Done+h.Missing+h.Pending+h.Failed+h.Removed > 0 {
+			b.WriteString(dim.Render(ansi.Truncate(fmt.Sprintf("%d saved · %d missing · %d pending · %d failed · %d removed", h.Done, h.Missing, h.Pending, h.Failed, h.Removed), max(1, w), "…")) + "\n")
+		}
 	}
 
+	activity := m.sourceActivity(w)
+	if m.terminalHeight() >= 18 && (activity != "" || m.prompt == promptNone) {
+		queue := "Download queue"
+		if activity == "" {
+			queue += " · idle"
+			if queued := m.eng.QueuedSources(); queued > 0 {
+				queue = "Download queue · " + countLabel(queued, "source") + " waiting"
+			}
+		}
+		b.WriteString(dim.Render(ansi.Truncate(queue, w, "…")) + "\n")
+	}
+	b.WriteString(activity)
+	if m.terminalHeight() >= 18 {
+		b.WriteString(dim.Render("Saved sources") + "\n")
+	}
+	rows := m.sourceRows(w)
+	if len(rows) == 0 {
+		message := "No sources yet. Paste a music link."
+		if queued := m.eng.QueuedSources(); queued > 0 {
+			message = "Press Enter to resume " + countLabel(queued, "source") + "."
+		}
+		rows = []string{dim.Render(message)}
+	}
+	m.listPanel(b, w, rows, m.cursor*2, 2, 0)
+	m.footer(b, m.help())
+}
+
+func (m model) sourceRows(w int) []string {
 	var rows []string
 	for i, s := range m.eng.Snapshot() {
 		mark := dim.Render("○")
@@ -121,72 +187,104 @@ func (m model) sourcesView(b *strings.Builder, w int) {
 				break
 			}
 		}
-		count := fmt.Sprintf("%d/%d", s.Done, s.Total)
-		if s.Done+s.Unavailable+s.Removed == s.Total {
+		count := "Listed"
+		if s.Total > 0 {
+			count = fmt.Sprintf("%d/%d", s.Done, s.Total)
+		}
+		if s.Total > 0 && s.Done == s.Total {
 			count = ok.Render(count)
 		}
-		if s.Removed > 0 {
+		if w >= 60 && s.Removed > 0 {
 			count += dim.Render(fmt.Sprintf(" · %d removed", s.Removed))
 		}
-		if s.Unavailable > 0 {
+		if w >= 60 && s.Unavailable > 0 {
 			count += dim.Render(fmt.Sprintf(" · %d unavail.", s.Unavailable))
 		}
 		if active {
-			count = hi.Render("downloading") + " · " + count
+			if w < 60 {
+				count = hi.Render("Active")
+			} else {
+				count = hi.Render("Downloading") + " · " + count
+			}
 		}
-		prefix := fmt.Sprintf("%s %-9s ", mark, tags[s.Type])
+		prefix := mark + " "
+		if w >= 55 {
+			prefix = fmt.Sprintf("%s %-9s ", mark, tags[s.Type])
+		}
 		tw := max(1, w-7-ansi.StringWidth(prefix)-ansi.StringWidth(count))
 		title := ansi.Truncate(strings.Join(strings.Fields(s.Title), " "), tw, "…")
 		rows = append(rows, pick(i == m.cursor, prefix+title+strings.Repeat(" ", max(0, tw-ansi.StringWidth(title)))+" "+count))
 		origin := s.URL
 		if s.Creator != "" {
 			origin = "By " + s.Creator
+			if p := ytdlp.Provider(s.URL); ytdlp.IsExternalProvider(p) {
+				if label := ytdlp.ProviderLabel(p); label != "" {
+					origin += " · " + label
+				}
+			}
 		}
 		rows = append(rows, dim.Render("    "+ansi.Truncate(strings.Join(strings.Fields(origin), " "), max(1, w-8), "…")))
 	}
-	if len(rows) == 0 {
-		message := "No sources yet. Paste a playlist, album or song link to start downloading."
-		if queued := m.eng.QueuedSources(); queued > 0 {
-			message = fmt.Sprintf("%d saved source(s) waiting. Press Enter to resume.", queued)
-		}
-		rows = []string{dim.Render(message)}
-	}
-	activity := m.sourceActivity(w)
-	m.listPanel(b, w, rows, m.cursor*2, 2, strings.Count(activity, "\n"))
-	b.WriteString(activity)
-	m.footer(b, m.help())
+	return rows
 }
 
 func (m model) sourceActivity(w int) string {
-	if m.terminalHeight() < 24 {
-		if m.run.busy && (m.terminalHeight() >= 16 || m.prompt == promptNone) {
-			return m.readingActivity(w) + fmt.Sprintf("  %s %d/%d · %d active\n", m.run.verb, m.run.done, m.run.total, len(m.run.jobs)) + m.activeAlbums(w)
+	if !m.run.busy {
+		if m.terminalHeight() >= 36 && time.Now().Before(m.cat.moodUntil) {
+			return m.catView(w) + "\n"
 		}
 		return ""
 	}
+	if m.terminalHeight() < 16 && m.prompt != promptNone {
+		return ""
+	}
 	var b strings.Builder
-	if m.run.busy {
-		b.WriteString(m.readingActivity(w))
-		b.WriteString(m.activeAlbums(w))
-		limit := 1
-		if m.terminalHeight() >= 32 {
-			limit = 3
+	b.WriteString(m.readingActivity(w))
+	switch {
+	case m.run.total > 0:
+		state := "Downloading"
+		if m.run.verb == "moved" {
+			state = "Moving files"
 		}
-		for i, id := range m.run.order {
-			if i >= limit {
-				b.WriteString(dim.Render(fmt.Sprintf("  %d more active tracks", len(m.run.order)-limit)) + "\n")
-				break
+		if m.eng.Paused() {
+			state = "Paused"
+		}
+		processed := m.run.done + m.run.failed + m.run.unavailable
+		line := fmt.Sprintf("  %s · %d/%d processed", state, processed, m.run.total)
+		if w >= 72 {
+			line += "  " + m.bar.ViewAs(m.run.progress())
+		}
+		b.WriteString(ansi.Truncate(line, w, "…") + "\n")
+	case m.run.readingURL == "" && m.run.verb == "downloaded":
+		b.WriteString("  Preparing downloads…\n")
+	case m.run.readingURL == "" && m.run.verb == "moved":
+		b.WriteString("  Planning file moves…\n")
+	}
+	b.WriteString(m.activeAlbums(w))
+	if m.terminalHeight() < 24 {
+		return b.String()
+	}
+	limit := 1
+	if m.terminalHeight() >= 32 {
+		limit = 3
+	}
+	for i, id := range m.run.order {
+		if i >= limit {
+			b.WriteString(dim.Render(fmt.Sprintf("  %d more active tracks", len(m.run.order)-limit)) + "\n")
+			break
+		}
+		if j := m.run.jobs[id]; j != nil {
+			title := j.title
+			if j.sourceTitle != "" {
+				title = j.sourceTitle + ": " + title
 			}
-			if j := m.run.jobs[id]; j != nil {
-				title := j.title
-				if j.sourceTitle != "" {
-					title = j.sourceTitle + ": " + title
-				}
-				b.WriteString(fmt.Sprintf("  %-32s %s\n", cut(title, 32), m.bar.ViewAs(j.pct)))
+			status := jobStatus(j)
+			if j.hasProgress && w >= 70 && j.pct < 1 {
+				status += " " + m.bar.ViewAs(j.pct)
 			}
+			b.WriteString(fmt.Sprintf("  %s  %s\n", status, cut(title, max(1, w-ansi.StringWidth(status)-6))))
 		}
 	}
-	b.WriteString("\n" + m.catView(w) + "\n")
 	return b.String()
 }
 

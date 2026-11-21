@@ -62,7 +62,7 @@ func (e *Engine) schedule(parent context.Context, emit func(Event)) error {
 	reading := false
 	plan := func(ids []string) error {
 		for _, sourceID := range ids {
-			add, err := e.plan([]string{sourceID}, queued, emit)
+			add, err := e.plan(ctx, []string{sourceID}, queued, emit)
 			if err != nil {
 				return err
 			}

@@ -21,7 +21,7 @@ func main() {
 	jobs := flag.Int("jobs", saved.Jobs, "parallel downloads")
 	cookies := flag.String("cookies", saved.Cookies, "browser to read cookies from (firefox, chrome, brave…) for private playlists or Liked Music")
 	flag.Usage = func() {
-		fmt.Fprint(os.Stderr, `ytmanager — download playlists, albums and songs from YouTube / YT Music
+		fmt.Fprint(os.Stderr, `ytmanager: download music from YouTube Music, SoundCloud and Bandcamp
 
   ytmanager [flags] [destination]             TUI
   ytmanager [flags] sync <destination>        re-sync everything saved in data.music
@@ -57,6 +57,13 @@ func main() {
 }
 
 func headless(cmd, dest string, urls []string, format string, opt engine.Options) error {
+	if cmd == "add" {
+		for _, link := range urls {
+			if ytdlp.Provider(link) == "" {
+				return errors.New("use " + ytdlp.SupportedProvidersText() + " links")
+			}
+		}
+	}
 	eng, err := engine.Open(dest, opt)
 	if err != nil {
 		return err

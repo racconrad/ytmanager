@@ -60,6 +60,12 @@ func (e *Engine) sourceSettled(source *manifest.Source) bool {
 		if track == nil || (track.Status != manifest.StatusDone && track.Status != manifest.StatusUnavailable && track.Status != manifest.StatusRemoved) {
 			return false
 		}
+		if track.Status == manifest.StatusDone && !track.Local && e.m.AudioPath(track) == "" {
+			if e.presence != nil {
+				e.presence[track.Path] = false
+			}
+			return false
+		}
 	}
 	return true
 }
@@ -129,11 +135,8 @@ func (e *Engine) pendingSources() []string {
 	defer e.mu.Unlock()
 	var ids []string
 	for _, source := range e.m.Sources {
-		for _, id := range source.Tracks {
-			if track := e.m.Tracks[id]; track != nil && track.Status != manifest.StatusDone && track.Status != manifest.StatusUnavailable && track.Status != manifest.StatusRemoved {
-				ids = append(ids, source.ID)
-				break
-			}
+		if !e.sourceSettled(source) {
+			ids = append(ids, source.ID)
 		}
 	}
 	return ids

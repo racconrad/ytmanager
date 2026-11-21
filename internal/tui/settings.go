@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"ytmanager/internal/engine"
 )
@@ -13,18 +14,24 @@ var (
 	browsers = []string{"", "firefox", "chrome", "chromium", "brave", "edge", "vivaldi", "opera"}
 	artists  = []string{"", "main", "all"}
 	folders  = []string{"", "artist", "flat"}
-	settings = []string{"Format", "Parallel tracks", "Browser cookies", "Artists", "Folders", "Video titles", "Parallel albums", "Move files to new folders", "Download everything again", "Choose destination folder"}
+	settings = []string{"Format", "Parallel tracks", "Browser cookies", "Artists", "Folders", "Video titles", "Parallel albums", "Organize existing files (preview)", "Download everything again", "Choose destination folder", "Convert existing audio (preview)", "Library management help"}
 )
 
 const (
 	moveFiles         = 7
 	reorganize        = 8
 	chooseDestination = 9
+	libraryGuide      = 11
 )
 
 // labels shows the empty default of artists and folders.
 var labels = map[string]string{"": "feat. in title", "main": "main only", "all": "all in artist"}
 var folderLabels = map[string]string{"": "Artist/Album", "artist": "Artist", "flat": "no folders"}
+
+func (m *model) openSettings() {
+	m.settingsFrom, m.settingsCursor = m.screen, m.cursor
+	m.screen, m.cursor = screenSettings, 0
+}
 
 func (m model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	step := 0
@@ -38,10 +45,22 @@ func (m model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case chooseDestination:
 			m.changeDestination()
 			return m, nil
+		case 10:
+			if !m.run.busy {
+				return m, m.openLibrary("convert")
+			}
+		case libraryGuide:
+			if m.library.scanning {
+				m.log("Wait for the folder scan to stop.")
+				return m, nil
+			}
+			m.library.help, m.library.settingsAction = true, "help"
+			m.screen, m.cursor = screenLibrary, 0
+			return m, nil
 		}
-		m.screen, m.cursor = screenSources, 0
+		m.closeSettings()
 	case "esc", "o":
-		m.screen, m.cursor = screenSources, 0
+		m.closeSettings()
 	case "up", "k":
 		m.cursor = max(0, m.cursor-1)
 	case "down", "j":
@@ -55,6 +74,14 @@ func (m model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.changeSetting(step)
 	}
 	return m, nil
+}
+
+func (m *model) closeSettings() {
+	if m.settingsFrom == screenLibrary {
+		m.screen, m.cursor = screenLibrary, m.settingsCursor
+	} else {
+		m.screen, m.cursor = screenSources, m.settingsCursor
+	}
 }
 
 func (m *model) changeSetting(step int) {
@@ -78,7 +105,7 @@ func (m *model) changeSetting(step int) {
 		m.opt.RawTitles = !m.opt.RawTitles
 	case 6:
 		m.opt.AlbumJobs = min(4, max(1, max(1, m.opt.AlbumJobs)+step))
-	case moveFiles, reorganize, chooseDestination:
+	case moveFiles, reorganize, chooseDestination, 10, 11:
 		return
 	}
 	if m.cursor > 0 {
@@ -96,9 +123,7 @@ func (m *model) moveFiles() tea.Cmd {
 		m.log(dim.Render("Wait for the download to finish before moving files."))
 		return nil
 	}
-	m.screen, m.cursor = screenSources, 0
-	m.log(dim.Render("Moving downloaded files to " + folderLabels[m.opt.Folders] + "…"))
-	return m.rearrange()
+	return m.openLibrary("organize")
 }
 
 // reorganize re-downloads the whole library with the current settings and goes back to the
@@ -137,7 +162,6 @@ func cycle(list []string, cur string, step int) string {
 }
 
 func (m model) settingsView(b *strings.Builder, w int) {
-	header(b, dim.Render("download settings"))
 	cookies := m.opt.Cookies
 	if cookies == "" {
 		cookies = "none"
@@ -147,29 +171,62 @@ func (m model) settingsView(b *strings.Builder, w int) {
 		titles = "as uploaded"
 	}
 	vals := []string{m.eng.Format(), fmt.Sprint(m.opt.Jobs), cookies, labels[m.opt.Artists], folderLabels[m.opt.Folders], titles, fmt.Sprint(max(1, m.opt.AlbumJobs))}
-	notes := []string{"saved in this destination's data.music", "1 to 8 total across all albums", "for private playlists or Liked Music",
-		"how collaborations are tagged", "how files are arranged", `drops "(Official Video)" and the like`, "1 to 4 sources; shares Parallel tracks"}
-	var rows []string
-	for i, s := range settings {
-		if i >= moveFiles {
-			note := "enter: apply Folders to what is already downloaded, no download"
-			if i == reorganize {
-				note = "enter: also applies Format, Artists and Video titles"
-			} else if i == chooseDestination {
-				note = "enter: choose another folder or subfolder"
-			}
-			if i == moveFiles {
-				rows = append(rows, "")
-			}
-			rows = append(rows, pick(m.cursor == i, hi.Render(s)+"  "+dim.Render(note)))
-			continue
+	notes := []string{
+		"Saved in data.music", "1 to 8 tracks across sources", "Private playlists / Liked Music",
+		"How to tag collaborators", "Folder layout for new files", "Clean removes video labels", "1 to 4 sources; shares track limit",
+		"Move files without downloading", "Replace downloaded files", "", "Originals go to trash", "Formats, duplicates and undo",
+	}
+	note := notes[m.cursor]
+	if m.cursor == chooseDestination {
+		note = "Current: " + destinationLabel(m.eng.Root(), m.terminalWidth()-9)
+	}
+	if m.run.busy && m.cursor != libraryGuide {
+		note = "Wait for downloads to finish"
+	}
+	available := m.terminalHeight() - m.footerHeight(m.help()) - strings.Count(b.String(), "\n")
+	wide := w >= 48 && available >= 8
+	title := hi.Render("Settings")
+	start, end := 0, len(settings)
+	if !wide {
+		if m.cursor < moveFiles {
+			title += dim.Render(" · Downloads")
+			end = moveFiles
+		} else {
+			title += dim.Render(" · Files and folders")
+			start = moveFiles
 		}
-		rows = append(rows, pick(m.cursor == i, fmt.Sprintf("%-20s ‹ %s ›  %s", s, hi.Render(vals[i]), dim.Render(notes[i]))))
 	}
-	selectedRow := m.cursor
-	if m.cursor >= moveFiles {
-		selectedRow++ // the blank row before the actions is not selectable
+	b.WriteString(title + "\n" + dim.Render(ansi.Truncate(note, m.terminalWidth(), "…")) + "\n")
+	if !wide {
+		visible := min(end-start, max(1, available-2))
+		start = min(max(start, m.cursor-visible/2), end-visible)
+		end = start + visible
 	}
-	m.listPanel(b, w, rows, selectedRow, 1, 0)
+	rows := make([]string, 0, end-start+2)
+	for i := start; i < end; i++ {
+		s := settings[i]
+		if wide && i == 0 {
+			rows = append(rows, dim.Render("  Downloads"))
+		} else if wide && i == moveFiles {
+			rows = append(rows, dim.Render("  Files and folders"))
+		}
+		if i < moveFiles {
+			if wide {
+				s = fmt.Sprintf("%-20s %s", s, hi.Render(vals[i]))
+			} else {
+				s += ": " + hi.Render(vals[i])
+			}
+		}
+		rows = append(rows, pick(i == m.cursor, s))
+	}
+	if wide {
+		selectedRow := m.cursor + 1
+		if m.cursor >= moveFiles {
+			selectedRow++
+		}
+		m.listPanel(b, w, rows, selectedRow, 1, 0)
+	} else {
+		b.WriteString(strings.Join(rows, "\n") + "\n")
+	}
 	m.footer(b, m.help())
 }

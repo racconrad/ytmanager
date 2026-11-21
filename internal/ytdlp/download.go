@@ -22,15 +22,15 @@ var audioArgs = map[string][]string{
 
 func ValidFormat(f string) bool { _, ok := audioArgs[f]; return ok }
 
-// Download fetches the audio of video id, described by an enriched info-json, into the folders
+// Download fetches the audio described by an enriched info-json into the folders
 // layout and returns its final path under root.
 //
 // yt-dlp runs in a local staging folder and the result is copied to root: on MTP (gvfs) yt-dlp
 // cannot move files (no utime) and --windows-filenames would rewrite the ':' in gvfs/mtp:host=….
-// The folder is named after the video and kept when ctx is cancelled, so after a pause yt-dlp
+// The staging folder is kept when ctx is cancelled, so after a pause yt-dlp
 // continues the .part file instead of starting over.
-func Download(ctx context.Context, id, infoJSON, root, format, folders, cookies string, progress func(float64)) (string, error) {
-	stage := filepath.Join(os.TempDir(), "ytmanager", id)
+func Download(ctx context.Context, stageID, infoJSON, root, format, folders, cookies string, progress func(float64)) (string, error) {
+	stage := filepath.Join(os.TempDir(), "ytmanager", stageID)
 	if err := os.MkdirAll(stage, 0o755); err != nil {
 		return "", err
 	}
@@ -45,12 +45,11 @@ func Download(ctx context.Context, id, infoJSON, root, format, folders, cookies 
 		return "", err
 	}
 	rel, err := filepath.Rel(stage, file)
-	if err != nil {
+	if err != nil || !filepath.IsLocal(rel) {
 		os.RemoveAll(stage)
-		return "", err
+		return "", fmt.Errorf("yt-dlp returned a file outside the staging directory")
 	}
-	dst := filepath.Join(root, rel)
-	err = CopyFile(file, dst)
+	dst, err := copyDownload(file, filepath.Join(root, rel))
 	if !device.IsSpaceError(err) {
 		os.RemoveAll(stage)
 	}

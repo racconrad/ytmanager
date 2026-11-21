@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"ytmanager/internal/manifest"
 )
 
 // ExportM3U creates explicitly requested UTF-8 M3U copies beside the originals.
@@ -34,7 +35,7 @@ func (e *Engine) ExportM3U(ctx context.Context, emit func(Event)) error {
 			return err
 		}
 		dest := strings.TrimSuffix(p, ".m3u8") + ".m3u"
-		const marker = "#EXTM3U\n# ytmanager compatibility export\n"
+		const marker = manifest.ExportMarker
 		previous, readErr := os.ReadFile(dest)
 		if readErr == nil {
 			if !strings.HasPrefix(string(previous), marker) {

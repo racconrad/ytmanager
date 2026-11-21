@@ -18,8 +18,10 @@ func Find(ctx context.Context, artist, title, album string, duration float64, vi
 	if r, ok := lrclib(ctx, artist, title, album, duration); ok {
 		return r, true
 	}
-	if txt, err := ytmusic(ctx, videoID); err == nil && txt != "" {
-		return Result{Text: txt}, true
+	if videoID != "" {
+		if txt, err := ytmusic(ctx, videoID); err == nil && txt != "" {
+			return Result{Text: txt}, true
+		}
 	}
 	return Result{}, false
 }

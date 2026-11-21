@@ -46,7 +46,7 @@ func TestPlanChecksDestinationAndTemporaryStorage(t *testing.T) {
 		}
 		return nil
 	}
-	ids, err := e.plan([]string{"source"}, map[string]bool{}, func(Event) {})
+	ids, err := e.plan(context.Background(), []string{"source"}, map[string]bool{}, func(Event) {})
 	if len(ids) != 0 || !errors.Is(err, device.ErrLowSpace) || len(checked) != 2 {
 		t.Fatalf("plan ignored temporary storage: %v, %v, %v", ids, err, checked)
 	}
@@ -117,7 +117,7 @@ func TestSyncStopsWhenSpaceDropsDuringDownload(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err = e.Sync(ctx, []string{"https://example.com/playlist?list=source"}, func(Event) {})
+	err = e.Sync(ctx, []string{"https://music.youtube.com/playlist?list=source"}, func(Event) {})
 	if !errors.Is(err, device.ErrLowSpace) {
 		t.Fatalf("sync did not return its storage stop reason: %v", err)
 	}

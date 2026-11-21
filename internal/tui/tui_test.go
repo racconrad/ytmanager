@@ -78,10 +78,13 @@ func TestBrowseSettingsPaste(t *testing.T) {
 	if m.browse != want {
 		t.Fatalf("browse = %q, want %q", m.browse, want)
 	}
-	m = press(m, "u")
-	if m.screen != screenSources || m.eng.Root() != want {
+	next, scan := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	m = next.(model)
+	if m.screen != screenLibrary || scan == nil || m.eng.Root() != want {
 		t.Fatalf("destination not opened at %q", want)
 	}
+	next, _ = m.Update(scan())
+	m = press(next.(model), "g")
 
 	m = press(m, "o", "right", "down", "right", "esc")
 	if m.eng.Format() != "m4a" || m.opt.Jobs != 4 || engine.LoadOptions().Jobs != 4 {
@@ -98,14 +101,12 @@ func TestBrowseSettingsPaste(t *testing.T) {
 	}
 
 	m = press(m, "o", "down", "down", "down", "down", "down", "down", "down", "enter") // move files
-	if m.screen != screenSources || !m.run.busy || m.run.verb != "moved" {
+	if m.screen != screenLibrary || !m.library.scanning || m.run.busy {
 		t.Fatalf("move files: screen %v busy %v verb %q", m.screen, m.run.busy, m.run.verb)
 	}
-	if msg, ok := (<-m.run.ch).(eventMsg); !ok || msg.Kind != engine.EvPlan || msg.Total != 0 {
-		t.Fatalf("move files: first message %+v", msg)
-	}
-	next, _ := m.Update(<-m.run.ch) // doneMsg
-	m = next.(model)
+	m.library.cancel()
+	m.library.scanning = false
+	m = press(m, "esc")
 
 	m.run.busy = true // pasting during a sync queues the link
 	m = paste(m, "https://music.youtube.com/playlist?list=X")

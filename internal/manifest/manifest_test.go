@@ -108,3 +108,27 @@ func TestExistingAudioCaseAndEmpty(t *testing.T) {
 		t.Fatal("accepted empty audio")
 	}
 }
+
+func TestGeneratedPlaylistsPreserveCustomAndSeparateSameTitles(t *testing.T) {
+	m, _ := Load(t.TempDir())
+	custom := filepath.Join(m.Root, "Album.m3u8")
+	os.WriteFile(custom, []byte("#EXTM3U\nmy-custom-song.opus\n"), 0600)
+	one := m.Merge("album", "one", "Album", "url", nil)
+	two := m.Merge("album", "two", "Album", "url", nil)
+	if err := m.WritePlaylists(); err != nil {
+		t.Fatal(err)
+	}
+	if m.PlaylistName(one) == m.PlaylistName(two) {
+		t.Fatal("equal source titles share a playlist")
+	}
+	if b, _ := os.ReadFile(custom); string(b) != "#EXTM3U\nmy-custom-song.opus\n" {
+		t.Fatal("custom playlist overwritten")
+	}
+	m.Remove("two")
+	if err := m.WritePlaylists(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(custom); string(b) != "#EXTM3U\nmy-custom-song.opus\n" {
+		t.Fatal("custom playlist replaced when source count changed")
+	}
+}

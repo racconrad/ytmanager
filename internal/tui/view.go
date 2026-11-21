@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -9,56 +8,77 @@ import (
 )
 
 var (
-	accent = lipgloss.Color("#c084fc")
-	gray   = lipgloss.Color("#4b5563")
-	logo   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0b0b0f")).Background(accent).Padding(0, 1)
-	dim    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	accent = lipgloss.AdaptiveColor{Light: "#583d74", Dark: "#d2b5ef"}
+	gray   = lipgloss.AdaptiveColor{Light: "#796b7e", Dark: "#62576b"}
+	logo   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#ffffff", Dark: "#0b0b0f"}).Background(accent).Padding(0, 1)
+	dim    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#615964", Dark: "#bcb2c4"})
 	hi     = lipgloss.NewStyle().Foreground(accent).Bold(true)
-	ok     = lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80"))
-	bad    = lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171"))
-	box    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(gray).Padding(0, 1)
+	ok     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#4ade80"})
+	bad    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#991b1b", Dark: "#f87171"})
+	box    = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(gray).Padding(0, 1)
 )
 
 func (m model) View() string {
+	m.nextCover = nil
 	var b strings.Builder
 	if m.terminalWidth() < 30 || m.terminalHeight() < 12 {
+		if m.overlay != nil {
+			m.overlay.setPlacement(nil)
+		}
 		return fitLines("Enlarge terminal to at least 30x12.", m.terminalWidth(), m.terminalHeight())
 	}
 	w := m.terminalWidth() - 4
-	switch m.screen {
-	case screenDevices:
+	m.writeNavigation(&b)
+	switch {
+	case m.shortcutHelp:
+		m.shortcutView(&b, w)
+	case m.screen == screenDevices:
 		m.devicesView(&b, w)
-	case screenBrowse:
+	case m.screen == screenBrowse:
 		m.browseView(&b, w)
-	case screenSettings:
+	case m.screen == screenSettings:
 		m.settingsView(&b, w)
-	case screenLibrary:
+	case m.screen == screenLibrary:
 		m.libraryView(&b, w)
-	case screenMissing:
+	case m.screen == screenCollection:
+		m.collectionView(&b, w)
+	case m.screen == screenArtist:
+		m.artistView(&b, w)
+	case m.screen == screenMissing:
 		m.missingView(&b, w)
 	default:
 		m.sourcesView(&b, w)
 	}
+	if m.overlay != nil {
+		m.overlay.setPlacement(m.nextCover)
+	}
 	return fitLines(b.String(), m.terminalWidth(), m.terminalHeight())
+}
+
+func (m model) writeNavigation(b *strings.Builder) {
+	if m.eng == nil || m.terminalWidth() < 52 || m.terminalHeight() < 18 ||
+		m.shortcutHelp || m.screen == screenDevices || m.screen == screenBrowse || m.libraryOverlayVisible() {
+		return
+	}
+	tabs := []string{"Library", "Sources", "Settings"}
+	for i, page := range []screen{screenLibrary, screenSources, screenSettings} {
+		if m.screen == page {
+			tabs[i] = hi.Render("[" + tabs[i] + "]")
+		} else {
+			tabs[i] = dim.Render(tabs[i])
+		}
+	}
+	b.WriteString(logo.Render("ytmanager") + "  " + strings.Join(tabs, "   ") + "\n")
+}
+
+func (m model) libraryOverlayVisible() bool {
+	l := m.library
+	return m.screen == screenLibrary && (l.candidates != nil || l.plan != nil || l.report != nil || l.details != nil ||
+		l.help || l.removeSource != nil || l.tools || l.purge || l.restore)
 }
 
 func header(b *strings.Builder, subtitle string) {
 	b.WriteString(logo.Render("ytmanager") + " " + subtitle + "\n\n")
-}
-
-// steps shows where the user is in device → folder → links.
-func steps(cur int) string {
-	names := []string{"Device", "Folder", "Links"}
-	parts := make([]string, len(names))
-	for i, n := range names {
-		s := fmt.Sprintf("%d %s", i+1, n)
-		if i+1 == cur {
-			parts[i] = hi.Render(s)
-		} else {
-			parts[i] = dim.Render(s)
-		}
-	}
-	return " " + strings.Join(parts, dim.Render("  ›  ")) + "\n\n"
 }
 
 // styleHelp highlights the key of each "key label" pair; status text stays plain.

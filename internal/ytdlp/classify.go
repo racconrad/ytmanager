@@ -1,6 +1,7 @@
 package ytdlp
 
 import (
+	"errors"
 	"math"
 	"regexp"
 	"strings"
@@ -34,7 +35,7 @@ func contains(err error, patterns []string) bool {
 // Unavailable reports whether a yt-dlp error is known to be permanent (video removed, private,
 // blocked). Unknown failures remain retryable.
 func Unavailable(err error) bool {
-	return contains(err, []string{
+	return errors.Is(err, errPreviewOnly) || contains(err, []string{
 		"video unavailable", "video is unavailable", "this video is not available",
 		"not available in your country", "private video", "has been removed",
 		"has been terminated", "copyright", "no longer available",

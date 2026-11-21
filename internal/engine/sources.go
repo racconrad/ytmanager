@@ -49,11 +49,7 @@ func (e *Engine) readSource(ctx context.Context, request manifest.SourceRequest,
 	emit(Event{Kind: EvReading, ID: request.URL})
 	defer emit(Event{Kind: EvReadDone, ID: request.URL})
 	emit(Event{Kind: EvLog, Msg: "Reading " + request.URL})
-	list := e.listSource
-	if list == nil {
-		list = ytdlp.List
-	}
-	listing, err := list(ctx, request.URL, e.opt.Cookies)
+	listing, err := e.Inspect(ctx, request.URL)
 	if ctx.Err() != nil {
 		return sourceResult{err: ctx.Err()}
 	}
@@ -63,15 +59,8 @@ func (e *Engine) readSource(ctx context.Context, request manifest.SourceRequest,
 	if len(listing.Entries) == 0 || listing.ID == "" {
 		return fail(fmt.Errorf("no tracks%s", cookieHint))
 	}
-	entries := make([]manifest.Entry, len(listing.Entries))
-	for i, entry := range listing.Entries {
-		entries[i] = manifest.Entry{ID: entry.ID, Title: entry.Title, Duration: entry.Duration, Unavailable: entry.Unavailable}
-	}
 	e.mu.Lock()
-	source := e.m.Merge(listing.Type, listing.ID, listing.Title, request.URL, entries)
-	if listing.Creator != "" {
-		source.Creator = listing.Creator
-	}
+	source := e.mergeSourceListing(listing, request.URL)
 	e.completeRequest(request.URL)
 	err = e.m.Save()
 	id := source.ID
@@ -79,6 +68,32 @@ func (e *Engine) readSource(ctx context.Context, request manifest.SourceRequest,
 	if err != nil {
 		return fail(fmt.Errorf("could not save data.music: %w", err))
 	}
-	emit(Event{Kind: EvLog, Msg: fmt.Sprintf("Queued %s (%s)", listing.Title, tracks(len(entries)))})
+	emit(Event{Kind: EvLog, Msg: fmt.Sprintf("Queued %s (%s)", listing.Title, tracks(len(listing.Entries)))})
 	return sourceResult{ids: []string{id}}
+}
+
+// mergeSourceListing is called with e.mu held.
+func (e *Engine) mergeSourceListing(listing *ytdlp.Listing, rawURL string) *manifest.Source {
+	entries := make([]manifest.Entry, len(listing.Entries))
+	for i, entry := range listing.Entries {
+		entries[i] = manifest.Entry{ID: entry.ID, Title: entry.Title, MediaURL: entry.URL, Duration: entry.Duration, Unavailable: entry.Unavailable}
+	}
+	id := listing.ID
+	if listing.Type == "album" && strings.HasPrefix(id, "OLAK5uy_") && e.m.Source(id) == nil {
+		// Older previews stored the browse ID; yt-dlp resolves that same URL to a playlist ID.
+		if saved := e.sourceForURL(rawURL); saved != nil && saved.URL == rawURL && saved.Type == "album" && strings.HasPrefix(saved.ID, "MPREb") {
+			id = saved.ID
+		}
+	}
+	source := e.m.Merge(listing.Type, id, listing.Title, rawURL, entries)
+	if listing.Cover != "" {
+		source.Cover = listing.Cover
+	}
+	if listing.Creator != "" {
+		source.Creator = listing.Creator
+	}
+	if listing.Year != "" {
+		source.Year = listing.Year
+	}
+	return source
 }

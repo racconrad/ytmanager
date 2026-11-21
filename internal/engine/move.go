@@ -128,6 +128,10 @@ func (e *Engine) move(ctx context.Context, id string, emit func(Event)) bool {
 		if err = moveFile(root, old, rel); err == nil {
 			e.mu.Lock()
 			t.Path = rel
+			if e.presence != nil {
+				e.presence[old] = false
+				e.presence[rel] = true
+			}
 			err = e.m.Save()
 			e.mu.Unlock()
 		}

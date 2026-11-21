@@ -25,12 +25,16 @@ type Source struct {
 	Title    string    `json:"title"`
 	Creator  string    `json:"creator,omitempty"` // artist, channel or playlist owner
 	URL      string    `json:"url"`
+	Cover    string    `json:"cover,omitempty"`
+	Year     string    `json:"year,omitempty"`
 	LastSync time.Time `json:"last_sync"`
 	Tracks   []string  `json:"tracks"`
+	Order    []string  `json:"order,omitempty"`
 }
 
 type Track struct {
 	Title    string  `json:"title"`
+	MediaURL string  `json:"media_url,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
 	Path     string  `json:"path,omitempty"` // relative to the destination root
 	Status   string  `json:"status"`
@@ -38,6 +42,7 @@ type Track struct {
 	Lyrics   string  `json:"lyrics,omitempty"` // synced | plain
 	Error    string  `json:"error,omitempty"`
 	Fails    int     `json:"fails,omitempty"` // consecutive non-network failures
+	Local    bool    `json:"local,omitempty"` // imported file; never fetch its synthetic ID
 }
 
 type Manifest struct {
@@ -56,9 +61,9 @@ type SourceRequest struct {
 }
 
 type Entry struct {
-	ID, Title   string
-	Duration    float64
-	Unavailable bool
+	ID, Title, MediaURL string
+	Duration            float64
+	Unavailable         bool
 }
 
 func (m *Manifest) Source(id string) *Source {
@@ -82,25 +87,46 @@ func (m *Manifest) Merge(typ, id, title, url string, entries []Entry) *Source {
 	if typ == "mix" {
 		keep = s.Tracks
 	}
-	s.Title, s.URL, s.LastSync, s.Tracks = title, url, time.Now().UTC(), keep
+	s.Type, s.Title, s.URL, s.LastSync, s.Tracks = typ, title, url, time.Now().UTC(), keep
+	s.Order = nil
+	var order []string
 	have := map[string]bool{}
 	for _, tid := range keep {
 		have[tid] = true
 	}
 	for _, e := range entries {
+		if typ != "mix" {
+			order = append(order, e.ID)
+		}
 		if !have[e.ID] {
 			have[e.ID] = true
 			s.Tracks = append(s.Tracks, e.ID)
 		}
 		if m.Tracks[e.ID] == nil {
-			t := &Track{Title: e.Title, Duration: e.Duration, Status: StatusPending}
+			t := &Track{Title: e.Title, MediaURL: e.MediaURL, Duration: e.Duration, Status: StatusPending}
 			if e.Unavailable {
 				t.Status = StatusUnavailable
 			}
 			m.Tracks[e.ID] = t
+		} else if t := m.Tracks[e.ID]; e.MediaURL != "" {
+			if t.MediaURL == "" && t.Status == StatusUnavailable && !e.Unavailable {
+				t.Status = StatusPending
+			}
+			t.MediaURL = e.MediaURL
 		}
 	}
+	if len(order) > len(s.Tracks) {
+		s.Order = order
+	}
 	return s
+}
+
+// TrackOrder preserves repeated entries without duplicating download jobs.
+func (s *Source) TrackOrder() []string {
+	if s.Order != nil {
+		return s.Order
+	}
+	return s.Tracks
 }
 
 // Remove drops the source from the manifest; its audio stays because another source may share it.
@@ -131,6 +157,9 @@ func (m *Manifest) Pending(sourceIDs []string) []string {
 			if t.Status == StatusUnavailable || t.Status == StatusRemoved {
 				continue
 			}
+			if t.Local {
+				continue
+			}
 			if t.Status == StatusDone {
 				if actual := existingAudioPath(m.Root, t.Path); actual != "" {
 					t.Path = actual
@@ -150,7 +179,7 @@ func (m *Manifest) AlbumOf(trackID string) (string, int) {
 		if s.Type != "album" {
 			continue
 		}
-		for i, id := range s.Tracks {
+		for i, id := range s.TrackOrder() {
 			if id == trackID {
 				return s.Title, i + 1
 			}
@@ -163,7 +192,9 @@ func (m *Manifest) Count(s *Source) (done, total, unavailable int) {
 	for _, id := range s.Tracks {
 		switch m.Tracks[id].Status {
 		case StatusDone:
-			done++
+			if existingAudioPath(m.Root, m.Tracks[id].Path) != "" {
+				done++
+			}
 		case StatusUnavailable:
 			unavailable++
 		}
@@ -171,10 +202,19 @@ func (m *Manifest) Count(s *Source) (done, total, unavailable int) {
 	return done, len(s.Tracks), unavailable
 }
 
+// AudioPath returns a nonempty existing audio path, including unique MTP case variants.
+func (m *Manifest) AudioPath(t *Track) string { return existingAudioPath(m.Root, t.Path) }
+
 // existingAudioPath resolves unique case-only variants returned by MTP.
 func existingAudioPath(root, rel string) string {
 	if rel == "" || filepath.IsAbs(rel) {
 		return ""
+	}
+	if !filepath.IsLocal(rel) {
+		return ""
+	}
+	if stat, err := os.Stat(filepath.Join(root, rel)); err == nil && stat.Mode().IsRegular() && stat.Size() > 0 {
+		return rel
 	}
 	current := root
 	for _, part := range strings.Split(filepath.Clean(rel), string(filepath.Separator)) {

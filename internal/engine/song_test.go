@@ -51,21 +51,23 @@ func TestUnconfirmedSongDoesNotDownloadOrRemoveOldFile(t *testing.T) {
 	}
 }
 
-func TestExplicitAlternativeBypassesSongResolution(t *testing.T) {
+func TestExplicitAlternativeRequiresSongResolution(t *testing.T) {
 	e, err := Open(t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.m.Merge("track", "video", "Song", "url", []manifest.Entry{{ID: "video", Title: "Song"}})
 	e.m.Tracks["video"].Alt = "chosen"
-	e.resolveSong = func(context.Context, string) (string, error) {
-		t.Fatal("explicit alternative was replaced")
-		return "", nil
+	e.resolveSong = func(_ context.Context, id string) (string, error) {
+		if id != "chosen" {
+			t.Fatalf("resolved %q instead of alternative", id)
+		}
+		return "", ytmusic.ErrNoSong
 	}
 	t.Setenv("PATH", t.TempDir())
 	e.track(context.Background(), "video", func(Event) {})
-	if e.m.Tracks["video"].Status != manifest.StatusFailed {
-		t.Fatal("expected missing yt-dlp")
+	if e.m.Tracks["video"].Error != ytmusic.ErrNoSong.Error() {
+		t.Fatal("unconfirmed alternative reached yt-dlp")
 	}
 }
 
@@ -92,5 +94,33 @@ func TestResolvedSongIsPassedToDownloader(t *testing.T) {
 	}
 	if _, ok := e.m.Tracks["audio"]; ok {
 		t.Fatal("source identity was replaced")
+	}
+}
+
+func TestRegisterProviderResolvesDecoupledSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX test executable")
+	}
+	e, err := Open(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	e.RegisterProvider("custom", TrackProvider{
+		Resolve: func(_ context.Context, requestedID, _, mediaURL string, _ func(string), _ func(string)) (TrackResolution, error) {
+			called = true
+			if requestedID != "custom-id" || mediaURL != "https://custom.example/song" {
+				t.Fatalf("unexpected resolve args: %q %q", requestedID, mediaURL)
+			}
+			return TrackResolution{DownloadID: "resolved-id", TargetURL: "https://custom.example/resolved"}, nil
+		},
+		NeedsAlternativeErr: "custom missing",
+	})
+	res, err := e.resolveTrack(context.Background(), "custom", "custom-id", "Song", "https://custom.example/song", "", func(string) {}, func(Event) {})
+	if err != nil || !called || res.TargetURL != "https://custom.example/resolved" || res.DownloadID != "resolved-id" {
+		t.Fatalf("unexpected resolution: %+v, %v (called=%v)", res, err, called)
+	}
+	if !e.isAlternativeError("custom missing") || !e.isAlternativeError(ytmusic.ErrNoSong.Error()) {
+		t.Fatal("registered NeedsAlternativeErr was not recognized")
 	}
 }

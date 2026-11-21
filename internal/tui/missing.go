@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Unavailable tracks: give each one an alternative (song, album or playlist link) or retry it.
@@ -23,7 +24,7 @@ func (m model) missingKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", "a":
 		if len(list) > 0 {
 			m.altFor = list[m.cursor].ID
-			cmd = m.ask(promptAlt, "song, album or playlist link with “"+cut(list[m.cursor].Title, 40)+"”", "")
+			cmd = m.ask(promptAlt, "YouTube Music link for “"+cut(list[m.cursor].Title, 40)+"”", "")
 		}
 	case "r":
 		if len(list) > 0 {
@@ -66,22 +67,54 @@ func (m *model) altResolved(msg altMsg) tea.Cmd {
 
 func (m model) missingView(b *strings.Builder, w int) {
 	list := m.eng.Missing()
-	header(b, dim.Render(fmt.Sprintf("%d need an alternative or retry", len(list))))
-	half := max(10, w/2)
-	var rows []string
-	for i, x := range list {
-		note := x.Source
-		if x.Error != "" {
-			note = x.Error
-		}
-		if x.Alt != "" {
-			note = "the alternative is unavailable too"
-		}
-		rows = append(rows, pick(i == m.cursor, fmt.Sprintf("%-*s %s", half, cut(x.Title, half), dim.Render(cut(note, max(10, half-6))))))
+	title := hi.Render("Unavailable tracks")
+	if len(list) == 0 {
+		b.WriteString(title + "\n" + ok.Render("No unavailable tracks to review.") + "\n")
+		m.footer(b, m.help())
+		return
 	}
-	if len(rows) == 0 {
-		rows = []string{dim.Render("Everything is available.")}
+	cursor := min(m.cursor, len(list)-1)
+	x := list[cursor]
+	available := m.terminalHeight() - m.footerHeight(m.help()) - strings.Count(b.String(), "\n")
+	w = min(w, 78)
+	summary := fmt.Sprintf(" · %d/%d", cursor+1, len(list))
+	if len(list) > 1 && available < 9 {
+		summary += " ↑↓"
 	}
-	m.listPanel(b, w, rows, m.cursor, 1, 0)
+	b.WriteString(title + dim.Render(summary) + "\n")
+	var detail []string
+	if x.Source != "" {
+		detail = append(detail, dim.Render("From: "+x.Source))
+	}
+	reason := strings.Join(strings.Fields(x.Error), " ")
+	if x.Alt != "" {
+		detail = append(detail, bad.Render("Alternative unavailable"))
+	}
+	if reason == "" && x.Alt == "" {
+		reason = "Original unavailable at source."
+	}
+	if reason != "" {
+		lines := strings.Split(ansi.Wrap(reason, w, ""), "\n")
+		limit := min(3, available-2-len(detail))
+		if len(lines) > limit {
+			lines = append(lines[:max(0, limit-1)], ansi.Truncate(strings.Join(lines[max(0, limit-1):], " "), w, "…"))
+		}
+		for _, line := range lines {
+			detail = append(detail, dim.Render(line))
+		}
+	}
+	if available >= 10 && m.prompt == promptNone {
+		detail = append(detail, dim.Render("Use a YouTube Music link for an alternative."))
+	}
+	if available < 9 {
+		b.WriteString(pick(true, x.Title) + "\n")
+	} else {
+		rows := make([]string, 0, len(list))
+		for i, item := range list {
+			rows = append(rows, pick(i == cursor, item.Title))
+		}
+		m.listPanel(b, w, rows, cursor, 1, len(detail))
+	}
+	b.WriteString(strings.Join(detail, "\n") + "\n")
 	m.footer(b, m.help())
 }

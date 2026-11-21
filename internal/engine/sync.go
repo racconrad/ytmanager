@@ -29,6 +29,7 @@ func (e *Engine) runDownloads(ctx context.Context, urls []string, refresh bool, 
 		return fmt.Errorf("could not save download queue: %w", err)
 	}
 	e.running, e.accepting, e.more = true, true, make(chan struct{}, 1)
+	e.physicalIndex = nil
 	e.mu.Unlock()
 	defer func() {
 		e.mu.Lock()

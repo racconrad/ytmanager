@@ -3,12 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ytmanager/internal/engine"
+	"ytmanager/internal/ytdlp"
 )
 
 func (m *model) togglePause() {
@@ -25,14 +25,32 @@ func (m *model) togglePause() {
 
 // add downloads the links now; during a sync they join it without stopping anything.
 func (m *model) add(words []string) tea.Cmd {
+	if len(words) == 1 && ytdlp.IsArtistURL(words[0]) {
+		return m.openArtistQuery(words[0])
+	}
 	var urls []string
+	var artistURL string
 	for _, w := range words {
-		if strings.Contains(w, "://") {
+		if ytdlp.IsArtistURL(w) {
+			if artistURL == "" {
+				artistURL = w
+			}
+			continue
+		}
+		if ytdlp.Provider(w) != "" {
 			urls = append(urls, w)
 		}
 	}
+	if len(urls) == 0 && artistURL != "" {
+		return m.openArtistQuery(artistURL)
+	}
+	if artistURL != "" {
+		m.log(dim.Render("Artist link ignored in batch add; press f to explore an artist."))
+	}
+	if len(urls)+boolToInt(artistURL != "") < len(words) {
+		m.log(bad.Render("Unsupported links ignored. Use " + ytdlp.SupportedProvidersText() + "."))
+	}
 	if len(urls) == 0 {
-		m.log(bad.Render("✗ that does not look like a YouTube link"))
 		return nil
 	}
 	if m.run.busy {
@@ -50,6 +68,13 @@ func (m *model) add(words []string) tea.Cmd {
 		return nil
 	}
 	return m.download(urls)
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (m *model) download(urls []string) tea.Cmd {
@@ -77,6 +102,10 @@ func (m *model) start(urls []string, verb string, do func(context.Context, func(
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan tea.Msg, 256)
 	m.run = run{busy: true, verb: verb, urls: urls, ch: ch, cancel: cancel, queue: m.run.queue, jobs: map[string]*job{}}
+	if verb == "repaired" || verb == "exported" {
+		// these walk every file without progress events; show the spinner from the start
+		m.run.readingURL, m.run.readingSince = m.eng.Root(), time.Now()
+	}
 	go func() {
 		err := do(ctx, func(e engine.Event) { ch <- eventMsg{ch, e} })
 		ch <- doneMsg{ch, err}
@@ -102,9 +131,16 @@ func (m *model) apply(e engine.Event) {
 	case engine.EvStart:
 		r.jobs[e.ID] = &job{title: e.Title, sourceID: e.SourceID, sourceTitle: e.SourceTitle}
 		r.order = append(r.order, e.ID)
+	case engine.EvStage:
+		if j := r.jobs[e.ID]; j != nil {
+			j.stage = e.Msg
+			if e.Msg != "Downloading" {
+				j.pct, j.hasProgress = 0, false
+			}
+		}
 	case engine.EvProgress:
 		if j := r.jobs[e.ID]; j != nil {
-			j.pct = e.Pct
+			j.pct, j.hasProgress = e.Pct, true
 		}
 	case engine.EvDone, engine.EvFailed, engine.EvUnavailable, engine.EvStopped:
 		switch e.Kind {

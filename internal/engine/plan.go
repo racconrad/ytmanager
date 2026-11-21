@@ -1,11 +1,17 @@
 package engine
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // plan returns the pending tracks of these sources that are not queued yet, after checking space.
-func (e *Engine) plan(sourceIDs []string, queued map[string]bool, emit func(Event)) ([]string, error) {
+func (e *Engine) plan(ctx context.Context, sourceIDs []string, queued map[string]bool, emit func(Event)) ([]string, error) {
 	if len(sourceIDs) == 0 {
 		return nil, nil // every link failed to read; readSources already said why
+	}
+	if err := e.recoverExisting(ctx, sourceIDs, emit); err != nil {
+		return nil, err
 	}
 	e.mu.Lock()
 	var add []string
