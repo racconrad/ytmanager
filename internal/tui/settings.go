@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"ytmanager/internal/buildinfo"
 	"ytmanager/internal/engine"
 )
 
@@ -183,7 +184,7 @@ func (m model) settingsView(b *strings.Builder, w int) {
 	if m.run.busy && m.cursor != libraryGuide {
 		note = "Wait for downloads to finish"
 	}
-	available := m.terminalHeight() - m.footerHeight(m.help()) - strings.Count(b.String(), "\n")
+	available := m.terminalHeight() - m.footerHeight(m.help()) - strings.Count(b.String(), "\n") - 1
 	wide := w >= 48 && available >= 8
 	title := hi.Render("Settings")
 	start, end := 0, len(settings)
@@ -196,7 +197,7 @@ func (m model) settingsView(b *strings.Builder, w int) {
 			start = moveFiles
 		}
 	}
-	b.WriteString(title + "\n" + dim.Render(ansi.Truncate(note, m.terminalWidth(), "…")) + "\n")
+	b.WriteString(title + "\n" + dim.Render("Version: "+buildinfo.Version) + "\n" + dim.Render(ansi.Truncate(note, m.terminalWidth(), "…")) + "\n")
 	if !wide {
 		visible := min(end-start, max(1, available-2))
 		start = min(max(start, m.cursor-visible/2), end-visible)

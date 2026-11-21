@@ -9,12 +9,14 @@ import (
 	"os/exec"
 	"os/signal"
 
+	"ytmanager/internal/buildinfo"
 	"ytmanager/internal/engine"
 	"ytmanager/internal/tui"
 	"ytmanager/internal/ytdlp"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print the application version")
 	saved := engine.LoadOptions() // what the settings panel saved; flags override it
 	format := flag.String("format", "", "opus | m4a | mp3 (saved in the destination's data.music)")
 	albums := flag.Int("albums", saved.AlbumJobs, "simultaneous albums/playlists (1 to 4; shares -jobs workers)")
@@ -32,6 +34,10 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("ytmanager", buildinfo.Version)
+		return
+	}
 
 	for _, bin := range []string{"yt-dlp", "ffmpeg"} {
 		if _, err := exec.LookPath(bin); err != nil {
