@@ -317,7 +317,7 @@ func (m model) activeAlbums(w int) string {
 	return "  " + hi.Render(ansi.Truncate(label+": "+strings.Join(names, " · "), max(1, w-4), "…")) + "\n"
 }
 
-// sourceStatus gives each source a glyph that reads without color: downloading, complete, partial or not started.
+// sourceStatus marks each source with a glyph that reads without color. ◐ is avoided: common terminal fonts lack it.
 func sourceStatus(active, complete bool, done int) string {
 	switch {
 	case active:
@@ -325,18 +325,18 @@ func sourceStatus(active, complete bool, done int) string {
 	case complete:
 		return ok.Render("✓")
 	case done > 0:
-		return dim.Render("◐")
+		return dim.Render("◌")
 	}
 	return dim.Render("·")
 }
 
 func progressBar(done, total, width int, complete bool) string {
 	filled := min(width, done*width/max(1, total))
-	bar := strings.Repeat("█", filled)
+	bar := strings.Repeat("━", filled)
 	if complete {
 		bar = ok.Render(bar)
 	} else {
 		bar = hi.Render(bar)
 	}
-	return bar + dim.Render(strings.Repeat("░", width-filled))
+	return bar + dim.Render(strings.Repeat("─", width-filled))
 }

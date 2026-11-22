@@ -190,7 +190,7 @@ func TestCheckboxesAppearOnlyWhileSelecting(t *testing.T) {
 func TestProgressBarFillsByShare(t *testing.T) {
 	for _, c := range []struct{ done, total, filled int }{{0, 8, 0}, {6, 8, 6}, {8, 8, 8}, {1, 3, 2}} {
 		bar := ansi.Strip(progressBar(c.done, c.total, 8, c.done == c.total))
-		if got := strings.Count(bar, "█"); got != c.filled || ansi.StringWidth(bar) != 8 {
+		if got := strings.Count(bar, "━"); got != c.filled || ansi.StringWidth(bar) != 8 {
 			t.Errorf("progressBar(%d,%d) = %q", c.done, c.total, bar)
 		}
 	}
