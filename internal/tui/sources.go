@@ -175,11 +175,8 @@ func (m model) sourcesView(b *strings.Builder, w int) {
 
 func (m model) sourceRows(w int) []string {
 	var rows []string
+	selecting := anyMarked(m.marked)
 	for i, s := range m.eng.Snapshot() {
-		mark := dim.Render("○")
-		if m.marked[s.ID] {
-			mark = hi.Render("●")
-		}
 		active := false
 		for _, j := range m.run.jobs {
 			if j.sourceID == s.ID {
@@ -187,12 +184,23 @@ func (m model) sourceRows(w int) []string {
 				break
 			}
 		}
+		complete := s.Total > 0 && s.Done == s.Total
+		mark := sourceStatus(active, complete, s.Done)
+		if selecting {
+			mark = dim.Render("○")
+			if m.marked[s.ID] {
+				mark = hi.Render("●")
+			}
+		}
 		count := "Listed"
 		if s.Total > 0 {
 			count = fmt.Sprintf("%d/%d", s.Done, s.Total)
 		}
-		if s.Total > 0 && s.Done == s.Total {
+		if complete {
 			count = ok.Render(count)
+		}
+		if w >= 70 && s.Total > 0 {
+			count = progressBar(s.Done, s.Total, 8, complete) + " " + count
 		}
 		if w >= 60 && s.Removed > 0 {
 			count += dim.Render(fmt.Sprintf(" · %d removed", s.Removed))
@@ -307,4 +315,28 @@ func (m model) activeAlbums(w int) string {
 		label = "Paused"
 	}
 	return "  " + hi.Render(ansi.Truncate(label+": "+strings.Join(names, " · "), max(1, w-4), "…")) + "\n"
+}
+
+// sourceStatus gives each source a glyph that reads without color: downloading, complete, partial or not started.
+func sourceStatus(active, complete bool, done int) string {
+	switch {
+	case active:
+		return hi.Render("↓")
+	case complete:
+		return ok.Render("✓")
+	case done > 0:
+		return dim.Render("◐")
+	}
+	return dim.Render("·")
+}
+
+func progressBar(done, total, width int, complete bool) string {
+	filled := min(width, done*width/max(1, total))
+	bar := strings.Repeat("█", filled)
+	if complete {
+		bar = ok.Render(bar)
+	} else {
+		bar = hi.Render(bar)
+	}
+	return bar + dim.Render(strings.Repeat("░", width-filled))
 }

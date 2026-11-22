@@ -30,19 +30,6 @@ func (m *model) libraryCatalogView(b *strings.Builder, w int) {
 	b.WriteString(hi.Render(ansi.Truncate(oneLine(label), w, "…")) + "\n")
 	b.WriteString(m.libraryActivity(w))
 
-	line := "Folder: " + destinationLabel(m.eng.Root(), max(1, w-8))
-	if m.library.query != "" {
-		line = "Find: " + m.library.query
-	}
-	if m.library.scanNotice != "" {
-		line = m.library.scanNotice + " · s retry"
-	}
-	if m.library.search {
-		b.WriteString(ansi.Truncate(m.input.View(), w, "…") + "\n")
-	} else {
-		b.WriteString(dim.Render(ansi.Truncate(line, w, "…")) + "\n")
-	}
-
 	marked := 0
 	for _, row := range rows {
 		if m.library.marked[row.ID] {
@@ -56,15 +43,20 @@ func (m *model) libraryCatalogView(b *strings.Builder, w int) {
 	if marked > 0 {
 		inventory += fmt.Sprintf(" · %d selected", marked)
 	}
-	if !m.library.scanning || m.terminalHeight() >= 16 {
-		b.WriteString(dim.Render(ansi.Truncate(inventory, w, "…")) + "\n")
+	line := m.library.scanNotice + " · s retry"
+	switch {
+	case m.library.scanNotice != "":
+	case m.library.query != "":
+		line = "Find: " + m.library.query + " · " + inventory
+	case m.library.scanning && m.terminalHeight() < 16:
+		line = destinationLabel(m.eng.Root(), max(1, w))
+	default:
+		line = destinationLabel(m.eng.Root(), max(1, w-ansi.StringWidth(inventory)-3)) + " · " + inventory
 	}
-	if m.terminalHeight() >= 21 && !m.library.scanning {
-		prompt := "Tracks"
-		if albumList {
-			prompt = "Albums   / find music"
-		}
-		b.WriteString("\n" + dim.Render(prompt) + "\n")
+	if m.library.search {
+		b.WriteString(ansi.Truncate(m.input.View(), w, "…") + "\n")
+	} else {
+		b.WriteString(dim.Render(ansi.Truncate(line, w, "…")) + "\n")
 	}
 
 	lines := m.libraryCatalogRows(items, albumList)
@@ -112,13 +104,21 @@ func albumFolderLabel(item libraryItem) string {
 
 func (m model) libraryCatalogRows(items []libraryItem, albumList bool) []string {
 	var lines []string
+	// Checkboxes appear only once something is marked; until then they are noise.
+	selecting, indent := anyMarked(m.library.marked), "  "
+	if selecting {
+		indent = "      "
+	}
 	for i, item := range items {
-		mark, marked := "[ ]", true
+		mark, marked := "", true
 		for _, row := range item.tracks {
 			marked = marked && m.library.marked[row.ID]
 		}
-		if marked {
-			mark = "[x]"
+		if selecting {
+			mark = "[ ] "
+			if marked {
+				mark = "[x] "
+			}
 		}
 		row := item.tracks[0]
 		title, detail := libraryTrackText(row)
@@ -129,7 +129,7 @@ func (m model) libraryCatalogRows(items []libraryItem, albumList bool) []string 
 				detail = artist + " · " + detail
 			}
 		}
-		lines = append(lines, pick(i == m.cursor, mark+" "+oneLine(title)), dim.Render("      "+oneLine(detail)))
+		lines = append(lines, pick(i == m.cursor, mark+oneLine(title)), dim.Render(indent+oneLine(detail)))
 	}
 	return lines
 }

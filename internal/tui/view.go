@@ -143,3 +143,12 @@ func cutLeft(s string, n int) string {
 
 func trim(s string) string     { return strings.TrimSpace(s) }
 func fields(s string) []string { return strings.Fields(s) }
+
+func anyMarked(marked map[string]bool) bool {
+	for _, on := range marked {
+		if on {
+			return true
+		}
+	}
+	return false
+}
