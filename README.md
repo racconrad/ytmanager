@@ -123,11 +123,22 @@ ytmanager ~/Music    # open a folder directly
 | Devices | `↑↓` move · `Enter` open · `e` edit path · `r` refresh |
 | Folders | `→` open · `←` up · `n` new folder · `u` use this folder · `Esc` back |
 | Library | `g` Sources · `/` search · `b` toggle albums/tracks · `s` rescan · `F` explore artist · `O` Settings · `c` change folder · `?` help |
-| Sources | `a` add · `Enter` resume · `s` sync · `f` find artists · `v` view tracks · `l` Library · `o` Settings · `n` unavailable |
-| Settings | `↑↓` move · `←→` change · `Enter` run action · `Esc` back |
+| Sources | `a` add · `Enter` resume · `s` sync · `f` find artists · `v` view tracks · `l` Library · `O` Settings · `n` unavailable |
+| Settings | `↑↓` move · `←→` change · `Enter` run action · `Esc` or `O` back |
 
 In Sources, `Space` marks sources for sync, `p` pauses the queue, and `x`
 cancels the current run. Removing a source with `d` keeps its audio.
+
+### Reading the screens
+
+- **Source status:** each saved source starts with `↓` downloading, `✓` complete,
+  `◐` partly downloaded, or `·` not started. Wide terminals (70+ columns) add a
+  progress bar next to the `done/total` count.
+- **Selection:** checkboxes in Library and `○`/`●` in Sources appear only after
+  you mark something with `Space`. Until then rows show just the music.
+- **Log line:** the bottom line shows the latest message. `PgUp`/`PgDn` open and
+  scroll the history, `Ctrl+Home` jumps to the oldest entry, and `Ctrl+End`
+  closes it again.
 
 ### Scripts and cron
 
@@ -168,7 +179,7 @@ artist or collection view to open the available cover in a browser.
 
 ## Settings
 
-Press `O` in Library or `o` in Sources. Settings are saved in `~/.config/ytmanager/config.json`; the
+Press `O` on any tab. Settings are saved in `~/.config/ytmanager/config.json`; the
 format is saved per destination.
 
 | Setting | Options |
