@@ -22,19 +22,27 @@ func (m model) logLines() []string {
 	return lines
 }
 
+// latestLog wraps the newest entry so recovery instructions in errors stay readable.
+func (m model) latestLog() []string {
+	lines := m.wrapLog("Logs › " + m.logs[len(m.logs)-1])
+	return lines[:min(m.logPage()+1, len(lines))]
+}
+
 func (m *model) scrollLogs(lines int) {
-	m.logScroll = min(max(0, len(m.logLines())-m.logHeight()), max(0, m.logScroll+lines))
+	n := len(m.logLines())
+	// Short histories still open one step so the earlier lines become readable.
+	limit := max(n-m.logPage(), min(1, n-1))
+	m.logScroll = min(max(0, limit), max(0, m.logScroll+lines))
 }
 
 func (m model) logsView() string {
+	if m.logScroll == 0 {
+		return dim.Render(strings.Join(m.latestLog(), "\n"))
+	}
 	lines, h := m.logLines(), m.logHeight()
 	end := max(0, len(lines)-m.logScroll)
 	start := max(0, end-h)
-	label := "Logs · live"
-	if m.logScroll > 0 {
-		label = fmt.Sprintf("Logs · %d-%d/%d", start+1, end, len(lines))
-	}
-	label += " · PgUp/PgDn · Ctrl+End latest"
+	label := fmt.Sprintf("Logs · %d-%d/%d · PgUp/PgDn · Ctrl+End latest", start+1, end, len(lines))
 	rows := []string{dim.Render(ansi.Truncate(label, max(1, m.terminalWidth()-2), "…"))}
 	for _, line := range lines[start:end] {
 		rows = append(rows, dim.Render("  "+line))

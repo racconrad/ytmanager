@@ -43,10 +43,18 @@ func (m model) helpLines(help string) []string {
 	return lines
 }
 
+// logHeight counts rows below the first log row. While following the tail only the latest entry shows.
 func (m model) logHeight() int {
 	if len(m.logs) == 0 {
 		return 0
 	}
+	if m.logScroll == 0 {
+		return len(m.latestLog()) - 1
+	}
+	return m.logPage()
+}
+
+func (m model) logPage() int {
 	return min(6, max(1, (m.terminalHeight()-12)/3))
 }
 
@@ -55,8 +63,8 @@ func (m model) footerHeight(help string) int {
 	if m.prompt != promptNone {
 		n += 2
 	}
-	if h := m.logHeight(); h > 0 {
-		n += h + 1 // log label and visible lines
+	if len(m.logs) > 0 {
+		n += m.logHeight() + 1 // log label and visible history lines
 	}
 	return n
 }

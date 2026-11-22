@@ -44,10 +44,10 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch k.String() {
 	case "pgup":
-		m.scrollLogs(max(1, m.logHeight()))
+		m.scrollLogs(m.logPage())
 		return m, nil
 	case "pgdown":
-		m.scrollLogs(-max(1, m.logHeight()))
+		m.scrollLogs(-m.logPage())
 		return m, nil
 	case "ctrl+home":
 		m.scrollLogs(len(m.logLines()))

@@ -158,7 +158,7 @@ func TestWheelTargetsListsOrLogs(t *testing.T) {
 		m.log(fmt.Sprint(i))
 	}
 	logY := m.height - m.footerHeight(m.help())
-	next, _ := m.Update(tea.MouseMsg{Y: logY + 1, Button: tea.MouseButtonWheelUp})
+	next, _ := m.Update(tea.MouseMsg{Y: logY, Button: tea.MouseButtonWheelUp})
 	m = next.(model)
 	if m.logScroll == 0 || m.cursor != 0 {
 		t.Fatal("wheel over logs moved the album selection")
