@@ -262,6 +262,19 @@ func (m model) libraryKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		} else if (key == "x" || key == "esc") && m.library.cancel != nil {
 			m.library.cancel()
+		} else if m.library.scanning && m.library.candidates == nil && m.library.plan == nil && !m.library.tools {
+			// Browsing and marking stay usable; finishLibraryScan keeps marks whose files did not change.
+			items := m.libraryItems()
+			switch key {
+			case " ":
+				if len(items) > 0 {
+					m.toggleLibraryMarks(items[m.cursor].tracks)
+				}
+			case "a":
+				m.toggleLibraryMarks(m.libraryRows())
+			default:
+				m.libraryNavigate(key, len(items))
+			}
 		}
 		return m, nil
 	}
@@ -489,23 +502,10 @@ func (m model) libraryKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 	case " ":
 		if len(items) > 0 {
-			all := true
-			for _, r := range items[m.cursor].tracks {
-				all = all && m.library.marked[r.ID]
-			}
-			for _, r := range items[m.cursor].tracks {
-				m.library.marked[r.ID] = !all
-			}
+			m.toggleLibraryMarks(items[m.cursor].tracks)
 		}
 	case "a":
-		rows := m.libraryRows()
-		all := len(rows) > 0
-		for _, r := range rows {
-			all = all && m.library.marked[r.ID]
-		}
-		for _, r := range rows {
-			m.library.marked[r.ID] = !all
-		}
+		m.toggleLibraryMarks(m.libraryRows())
 	case "d":
 		if !m.library.complete {
 			return m, m.scanLibrary()
@@ -538,6 +538,17 @@ func (m model) libraryKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.libraryNavigate(key, len(items))
 	}
 	return m, m.requestCover(m.libraryCoverKey())
+}
+
+// toggleLibraryMarks marks every row, or clears them when all are already marked.
+func (m *model) toggleLibraryMarks(rows []engine.LibraryTrack) {
+	all := len(rows) > 0
+	for _, r := range rows {
+		all = all && m.library.marked[r.ID]
+	}
+	for _, r := range rows {
+		m.library.marked[r.ID] = !all
+	}
 }
 
 func (m *model) leaveLibrary() {

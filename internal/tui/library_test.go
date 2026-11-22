@@ -234,3 +234,15 @@ func TestLibraryToolsAndReportsFitSmallTerminals(t *testing.T) {
 		}
 	}
 }
+
+func TestLibraryMarksAndBrowsesDuringRescan(t *testing.T) {
+	m := libraryModel(t)
+	m.library.scanning = true // a slow phone rescan is in progress
+	m = press(m, "down", " ")
+	if m.cursor != 1 || len(m.library.marked) != 1 {
+		t.Fatalf("rescan blocked browsing: cursor=%d marked=%v", m.cursor, m.library.marked)
+	}
+	if m = press(m, "d"); m.library.candidates != nil {
+		t.Fatal("deletion review started before the scan finished")
+	}
+}
