@@ -91,7 +91,7 @@ func (m model) help() string {
 		if m.run.busy {
 			return "p pause/resume · x cancel · v tracks · ? keys · a add link"
 		}
-		return "a add link · l library · ? keys · f find artist · v tracks · enter resume · o settings"
+		return "a add link · l library · ? keys · f find artist · v tracks · enter resume · O settings"
 	}
 }
 
@@ -122,9 +122,9 @@ func (m model) shortcutList() (string, []string) {
 	case screenMissing:
 		title, actions = "Unavailable tracks", "↑↓ move · enter set alternative · paste alternative link · r retry · esc back"
 	default:
-		title, actions = "Source", "↑↓ move · space mark source · a add link · l open local library · f find artist · F find selected artist · v view tracks · enter resume downloads · s sync sources and download · d remove source, keep audio · D review source files · r repair library · e export playlists · n unavailable tracks · o settings · c change folder"
+		title, actions = "Source", "↑↓ move · space mark source · a add link · l open local library · f find artist · F find selected artist · v view tracks · enter resume downloads · s sync sources and download · d remove source, keep audio · D review source files · r repair library · e export playlists · n unavailable tracks · O settings · c change folder"
 		if m.run.busy {
-			actions = "p pause/resume · x cancel downloads · v view tracks · a add link · f find artist · F find selected artist · n unavailable tracks · o settings"
+			actions = "p pause/resume · x cancel downloads · v view tracks · a add link · f find artist · F find selected artist · n unavailable tracks · O settings"
 		}
 	}
 	actions += " · ctrl+c quit"

@@ -86,7 +86,7 @@ func styleHelp(help string) string {
 	parts := strings.Split(help, " · ")
 	for i, p := range parts {
 		k, label, found := strings.Cut(p, " ")
-		if found && len([]rune(k)) <= 7 && strings.ToLower(k) == k {
+		if found && (len([]rune(k)) == 1 || len([]rune(k)) <= 7 && strings.ToLower(k) == k) {
 			parts[i] = hi.Render(k) + " " + dim.Render(label)
 		} else {
 			parts[i] = dim.Render(p)

@@ -100,7 +100,7 @@ func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.library.sourceTracks = ids
 			m.library.albums = true
 		}
-	case "o":
+	case "o", "O":
 		m.openSettings()
 	case "n":
 		m.screen, m.cursor = screenMissing, 0

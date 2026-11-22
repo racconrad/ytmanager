@@ -60,7 +60,7 @@ func (m model) settingsKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.closeSettings()
-	case "esc", "o":
+	case "esc", "o", "O":
 		m.closeSettings()
 	case "up", "k":
 		m.cursor = max(0, m.cursor-1)
