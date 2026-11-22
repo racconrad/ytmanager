@@ -30,7 +30,6 @@ type LibraryTrack struct {
 
 func (e *Engine) Library() []LibraryTrack {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	contexts := map[string]struct{ sources, creators []string }{}
 	pathSources := map[string]map[string]string{}
 	for _, source := range e.m.Sources {
@@ -51,17 +50,12 @@ func (e *Engine) Library() []LibraryTrack {
 		}
 	}
 	var out []LibraryTrack
+	removed := map[string]bool{}
 	for id, t := range e.m.Tracks {
 		if t.Path == "" {
 			continue
 		}
-		// A crash after saving the tombstone may leave the file behind.
-		// Keep that file visible so the user can retry the deletion.
-		if t.Status == manifest.StatusRemoved {
-			if _, err := os.Lstat(filepath.Join(e.m.Root, t.Path)); os.IsNotExist(err) {
-				continue
-			}
-		}
+		removed[id] = t.Status == manifest.StatusRemoved
 		row := LibraryTrack{ID: id, Title: t.Title, Path: t.Path, Duration: t.Duration, Status: "present"}
 		row.Sources = strings.Join(contexts[id].sources, " · ")
 		row.Creators = strings.Join(contexts[id].creators, " · ")
@@ -79,7 +73,21 @@ func (e *Engine) Library() []LibraryTrack {
 		if album, _ := e.m.AlbumOf(id); album != "" {
 			row.Album = album
 		}
-		if info, err := os.Stat(filepath.Join(e.m.Root, t.Path)); err == nil {
+		out = append(out, row)
+	}
+	root := e.m.Root
+	e.mu.Unlock()
+	// Stat outside the lock: on USB or MTP it is slow and would stall downloads and rendering.
+	kept := out[:0]
+	for _, row := range out {
+		// A crash after saving the tombstone may leave the file behind.
+		// Keep that file visible so the user can retry the deletion.
+		if removed[row.ID] {
+			if _, err := os.Lstat(filepath.Join(root, row.Path)); os.IsNotExist(err) {
+				continue
+			}
+		}
+		if info, err := os.Stat(filepath.Join(root, row.Path)); err == nil {
 			row.Size, row.Modified = info.Size(), info.ModTime().UnixNano()
 			if !info.Mode().IsRegular() || info.Size() == 0 {
 				row.Invalid, row.Status = true, "invalid"
@@ -89,8 +97,9 @@ func (e *Engine) Library() []LibraryTrack {
 		} else {
 			row.Status, row.Note = "unreadable", err.Error()
 		}
-		out = append(out, row)
+		kept = append(kept, row)
 	}
+	out = kept
 	sort.Slice(out, func(i, j int) bool {
 		a, b := strings.ToLower(out[i].Title), strings.ToLower(out[j].Title)
 		if a != b {

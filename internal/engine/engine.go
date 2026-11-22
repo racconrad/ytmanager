@@ -81,6 +81,7 @@ type Engine struct {
 	providers     map[string]TrackProvider
 	physicalIndex map[string][]string // embedded source IDs, cached for one sync
 	presence      map[string]bool     // refreshed by scans and operations, never poll USB in each render
+	probes        *probeCache
 	scanDone      atomic.Int64
 	scanTotal     atomic.Int64
 }
@@ -105,7 +106,7 @@ func Open(root string, opt Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &Engine{m: m, gate: newGate()}
+	e := &Engine{m: m, gate: newGate(), probes: loadProbeCache(m.Root)}
 	e.providers = e.defaultProviders()
 	e.SetOptions(opt)
 	return e, nil

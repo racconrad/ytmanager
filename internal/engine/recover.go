@@ -57,19 +57,27 @@ func (e *Engine) recoverExisting(ctx context.Context, sources []string, emit fun
 			if d.Type()&os.ModeSymlink != 0 || !audioExtension(p) {
 				return nil
 			}
-			tags, err := ytdlp.Tags(ctx, p)
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
+			rel, _ := filepath.Rel(e.Root(), p)
+			stat, err := d.Info()
 			if err != nil {
 				return nil
 			}
-			if id := embeddedID(tags); id != "" {
-				rel, _ := filepath.Rel(e.Root(), p)
+			cached, hit := e.probes.get(rel, stat)
+			info := cached.Info
+			if !hit {
+				if info, err = ytdlp.Probe(ctx, p); ctx.Err() != nil {
+					return ctx.Err()
+				} else if err != nil {
+					return nil
+				}
+				e.probes.put(rel, stat, info, "")
+			}
+			if id := embeddedID(info.Tags); id != "" {
 				index[id] = append(index[id], rel)
 			}
 			return nil
 		})
+		_ = e.probes.save()
 		if err != nil {
 			return fmt.Errorf("could not inspect existing music: %w", err)
 		}

@@ -30,6 +30,11 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 		byPath[filepath.Clean(t.Path)] = append(byPath[filepath.Clean(t.Path)], t)
 		bySource[t.ID] = append(bySource[t.ID], t)
 	}
+	// Case-only variants (MTP, FAT) match one managed path, never an ambiguous pair.
+	byFold := map[string][]string{}
+	for p := range byPath {
+		byFold[strings.ToLower(p)] = append(byFold[strings.ToLower(p)], p)
+	}
 	e.mu.Lock()
 	for id, t := range e.m.Tracks {
 		if t.Alt != "" {
@@ -80,16 +85,8 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 			return nil
 		}
 		entries := byPath[rel]
-		if len(entries) == 0 {
-			for expected, candidates := range byPath {
-				if strings.EqualFold(expected, rel) {
-					if entries != nil {
-						entries = nil
-						break
-					}
-					entries = candidates
-				}
-			}
+		if folded := byFold[strings.ToLower(rel)]; len(entries) == 0 && len(folded) == 1 {
+			entries = byPath[folded[0]]
 		}
 		if len(entries) == 0 {
 			entries = []LibraryTrack{{ID: "file:" + rel, Title: strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())), Unmanaged: true}}
@@ -131,7 +128,14 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 	}
 	if err != nil {
 		failures = append(failures, err)
+	} else {
+		walked := map[string]bool{}
+		for _, f := range files {
+			walked[f.rel] = true
+		}
+		e.probes.prune(walked)
 	}
+	_ = e.probes.save() // the cache only speeds up the next scan; losing it is harmless
 	for _, row := range managed {
 		if !seen[row.ID] {
 			row.Duplicate = false
@@ -232,13 +236,24 @@ func (e *Engine) ScanProgress() (done, total int) {
 func (e *Engine) scanOne(ctx context.Context, f scanFile, bySource map[string][]LibraryTrack) []LibraryTrack {
 	p, rel, stat, entries := f.path, f.rel, f.stat, f.entries
 	var rows []LibraryTrack
-	info, probeErr := ytdlp.Probe(ctx, p)
-	if ctx.Err() != nil {
-		return nil
+	cached, hit := e.probes.get(rel, stat)
+	info, hash := cached.Info, cached.Hash
+	var probeErr, hashErr error
+	if !hit {
+		info, probeErr = ytdlp.Probe(ctx, p)
+		if ctx.Err() != nil {
+			return nil
+		}
 	}
-	hash, hashErr := hashFile(ctx, p)
-	if ctx.Err() != nil {
-		return nil
+	if hash == "" {
+		hash, hashErr = hashFile(ctx, p)
+		if ctx.Err() != nil {
+			return nil
+		}
+	}
+	// Failures are not cached so a reconnected device or installed tool is retried.
+	if probeErr == nil && hashErr == nil && (!hit || cached.Hash == "") {
+		e.probes.put(rel, stat, info, hash)
 	}
 	for _, row := range entries {
 		row.Path, row.Size, row.Modified = rel, stat.Size(), stat.ModTime().UnixNano()
