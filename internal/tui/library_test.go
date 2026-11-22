@@ -246,3 +246,22 @@ func TestLibraryMarksAndBrowsesDuringRescan(t *testing.T) {
 		t.Fatal("deletion review started before the scan finished")
 	}
 }
+
+func TestOpeningFolderAnnouncesSavedQueue(t *testing.T) {
+	root := t.TempDir()
+	data, err := manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data.Queue = []manifest.SourceRequest{{URL: "https://music.youtube.com/playlist?list=OLAK5uy_a"}, {URL: "https://music.youtube.com/playlist?list=OLAK5uy_b"}}
+	if err := data.Save(); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel()
+	cmd := m.use(root)
+	next, _ := m.Update(cmd())
+	m = next.(model)
+	if len(m.logs) == 0 || !strings.Contains(m.logs[len(m.logs)-1], "2 sources waiting") {
+		t.Fatalf("saved queue was not announced: %v", m.logs)
+	}
+}

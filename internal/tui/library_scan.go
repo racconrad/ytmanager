@@ -75,7 +75,12 @@ func (m *model) finishLibraryScan(msg libraryScannedMsg) {
 			break
 		}
 	}
-	m.log(scanSummary(before, msg.tracks, m.library.inventoryKnown))
+	summary := scanSummary(before, msg.tracks, m.library.inventoryKnown)
+	// The app opens on Library, so a queue saved by a previous session must be announced here.
+	if queued := m.eng.QueuedSources(); queued > 0 && !m.run.busy {
+		summary += " · " + countLabel(queued, "source") + " waiting to download: g, then Enter resumes"
+	}
+	m.log(summary)
 	m.library.inventoryKnown = true
 }
 
