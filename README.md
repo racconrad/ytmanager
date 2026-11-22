@@ -132,7 +132,7 @@ cancels the current run. Removing a source with `d` keeps its audio.
 ### Reading the screens
 
 - **Source status:** each saved source starts with `↓` downloading, `✓` complete,
-  `◐` partly downloaded, or `·` not started. Wide terminals (70+ columns) add a
+  `◌` partly downloaded, or `·` not started. Wide terminals (70+ columns) add a
   progress bar next to the `done/total` count.
 - **Selection:** checkboxes in Library and `○`/`●` in Sources appear only after
   you mark something with `Space`. Until then rows show just the music.
