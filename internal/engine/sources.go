@@ -76,7 +76,7 @@ func (e *Engine) readSource(ctx context.Context, request manifest.SourceRequest,
 func (e *Engine) mergeSourceListing(listing *ytdlp.Listing, rawURL string) *manifest.Source {
 	entries := make([]manifest.Entry, len(listing.Entries))
 	for i, entry := range listing.Entries {
-		entries[i] = manifest.Entry{ID: entry.ID, Title: entry.Title, MediaURL: entry.URL, Duration: entry.Duration, Unavailable: entry.Unavailable}
+		entries[i] = manifest.Entry{ID: entry.ID, Title: entry.Title, Artist: entry.PrimaryArtist(), MediaURL: entry.URL, Duration: entry.Duration, Unavailable: entry.Unavailable}
 	}
 	id := listing.ID
 	if listing.Type == "album" && strings.HasPrefix(id, "OLAK5uy_") && e.m.Source(id) == nil {
@@ -91,6 +91,9 @@ func (e *Engine) mergeSourceListing(listing *ytdlp.Listing, rawURL string) *mani
 	}
 	if listing.Creator != "" {
 		source.Creator = listing.Creator
+	}
+	if listing.AlbumArtist != "" {
+		source.AlbumArtist = listing.AlbumArtist
 	}
 	if listing.Year != "" {
 		source.Year = listing.Year

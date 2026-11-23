@@ -16,9 +16,29 @@ var videoNoise = regexp.MustCompile(`(?i)\s*[\(\[](official|lyric|audio|video|vi
 // no genre guessed from video tags. opt.Artists decides where the other artists go. It returns
 // the artist and title.
 func tag(info map[string]any, album string, n int, opt Options) (artist, title string) {
+	return tagAlbum(info, album, "", n, opt)
+}
+
+func tagAlbum(info map[string]any, album, sourceAlbumArtist string, n int, opt Options) (artist, title string) {
 	str := func(k string) string { s, _ := info[k].(string); return s }
 
 	all := creditedArtists(info)
+	expectedAlbumArtist := cleanArtist(sourceAlbumArtist)
+	if expectedAlbumArtist != "" && len(all) > 1 {
+		for i, name := range all {
+			if strings.EqualFold(name, expectedAlbumArtist) {
+				if i > 0 {
+					// Keep the album's main artist first so collaborators become feat. instead of the owner.
+					reordered := make([]string, 0, len(all))
+					reordered = append(reordered, all[i])
+					reordered = append(reordered, all[:i]...)
+					reordered = append(reordered, all[i+1:]...)
+					all = reordered
+				}
+				break
+			}
+		}
+	}
 	artist = "Unknown Artist"
 	if len(all) > 0 {
 		artist = all[0]
@@ -29,7 +49,12 @@ func tag(info map[string]any, album string, n int, opt Options) (artist, title s
 	}
 	albumArtist := cleanArtist(str("album_artist"))
 	// Keep explicit album credits, including compilations and guest tracks.
-	// When absent, derive the folder artist from music credits, never the channel.
+	// When absent (or overridden by a collab's first artist), prefer the album source's owner.
+	if expectedAlbumArtist != "" && !strings.EqualFold(albumArtist, "Various Artists") {
+		if albumArtist == "" || !strings.EqualFold(albumArtist, expectedAlbumArtist) {
+			albumArtist = expectedAlbumArtist
+		}
+	}
 	if albumArtist == "" {
 		albumArtist = artist
 	}

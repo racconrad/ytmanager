@@ -48,3 +48,30 @@ func TestAllArtistsUsesCleanCredits(t *testing.T) {
 		t.Fatalf("all artists: %+v", info)
 	}
 }
+
+func TestAlbumArtistMovesOwnerFirstAndKeepsSameFolder(t *testing.T) {
+	info := map[string]any{
+		"title":        "Collab Track",
+		"artists":      []any{"Guest", "Main Artist", "Other"},
+		"album_artist": "Guest",
+	}
+	artist, title := tagAlbum(info, "Record", "Main Artist", 3, Options{})
+	if artist != "Main Artist" || info["artist"] != "Main Artist" || info["album_artist"] != "Main Artist" {
+		t.Fatalf("unexpected artists: artist=%q info=%+v", artist, info)
+	}
+	if title != "Collab Track (feat. Guest, Other)" {
+		t.Fatalf("unexpected title: %q", title)
+	}
+}
+
+func TestAlbumArtistPreservesVariousArtistsCompilation(t *testing.T) {
+	info := map[string]any{
+		"title":        "Song",
+		"artists":      []any{"Guest"},
+		"album_artist": "Various Artists",
+	}
+	artist, title := tagAlbum(info, "Compilation", "Main Artist", 1, Options{})
+	if artist != "Guest" || info["album_artist"] != "Various Artists" || title != "Song" {
+		t.Fatalf("compilation overwritten: artist=%q title=%q info=%+v", artist, title, info)
+	}
+}

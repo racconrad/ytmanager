@@ -124,3 +124,46 @@ func TestRegisterProviderResolvesDecoupledSource(t *testing.T) {
 		t.Fatal("registered NeedsAlternativeErr was not recognized")
 	}
 }
+
+func TestPlaylistReusesExistingResolvedAlbumTrackWithoutDuplicateFlag(t *testing.T) {
+	root := t.TempDir()
+	e, err := Open(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join("Artist", "Album", "01 - Song.opus")
+	writeTestAudio(t, root, rel, "atv1")
+	e.m.Merge("album", "OLAK1", "Album", "https://music.youtube.com/playlist?list=OLAK1", []manifest.Entry{{ID: "atv1", Title: "Song"}})
+	e.m.Tracks["atv1"].Path = rel
+	e.m.Tracks["atv1"].Status = manifest.StatusDone
+	e.m.Merge("playlist", "PL1", "Playlist", "https://music.youtube.com/playlist?list=PL1", []manifest.Entry{{ID: "vid1", Title: "Song"}})
+	if err := e.m.Save(); err != nil {
+		t.Fatal(err)
+	}
+	e.resolveSong = func(_ context.Context, id string) (string, error) {
+		if id == "vid1" {
+			return "atv1", nil
+		}
+		return id, nil
+	}
+	// Ensure no download binary is called because existing audio is reused.
+	pathDir := t.TempDir()
+	t.Setenv("PATH", pathDir)
+	if !e.track(context.Background(), "vid1", func(Event) {}) {
+		t.Fatal("track returned stopped")
+	}
+	tr := e.m.Tracks["vid1"]
+	if tr.Status != manifest.StatusDone || tr.Path != rel || tr.ResolvedID != "atv1" {
+		t.Fatalf("expected playlist track to reuse album file, got %+v", tr)
+	}
+
+	// Verify the shared single physical file is not flagged as duplicate by markDuplicates.
+	rows := []LibraryTrack{
+		{ID: "atv1", Title: "Song", Artist: "Artist", Path: rel, Hash: "same"},
+		{ID: "vid1", Title: "Song", Artist: "Artist", Path: rel, Hash: "same"},
+	}
+	markDuplicates(rows)
+	if rows[0].Duplicate || rows[1].Duplicate {
+		t.Fatalf("shared single physical file falsely marked duplicate: %+v", rows)
+	}
+}

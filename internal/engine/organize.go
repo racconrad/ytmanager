@@ -59,6 +59,9 @@ func (e *Engine) PlanLibrary(ctx context.Context, rows []LibraryTrack, format, l
 		}
 		if layout != "keep" {
 			tags := map[string]string{"title": row.Title, "artist": row.Artist, "album_artist": row.AlbumArtist, "album": row.Album, "track": row.TrackNumber}
+			e.mu.Lock()
+			enrichAlbumTags(e.m, row.ID, tags)
+			e.mu.Unlock()
 			rel, err := ytdlp.Name(ctx, tags, ext, layout)
 			if err != nil {
 				change.Problem = err.Error()

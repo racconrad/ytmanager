@@ -20,29 +20,32 @@ const (
 )
 
 type Source struct {
-	Type     string    `json:"type"` // playlist | album | mix | track
-	ID       string    `json:"id"`
-	Title    string    `json:"title"`
-	Creator  string    `json:"creator,omitempty"` // artist, channel or playlist owner
-	URL      string    `json:"url"`
-	Cover    string    `json:"cover,omitempty"`
-	Year     string    `json:"year,omitempty"`
-	LastSync time.Time `json:"last_sync"`
-	Tracks   []string  `json:"tracks"`
-	Order    []string  `json:"order,omitempty"`
+	Type        string    `json:"type"` // playlist | album | mix | track
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Creator     string    `json:"creator,omitempty"` // artist, channel or playlist owner
+	AlbumArtist string    `json:"album_artist,omitempty"`
+	URL         string    `json:"url"`
+	Cover       string    `json:"cover,omitempty"`
+	Year        string    `json:"year,omitempty"`
+	LastSync    time.Time `json:"last_sync"`
+	Tracks      []string  `json:"tracks"`
+	Order       []string  `json:"order,omitempty"`
 }
 
 type Track struct {
-	Title    string  `json:"title"`
-	MediaURL string  `json:"media_url,omitempty"`
-	Duration float64 `json:"duration,omitempty"`
-	Path     string  `json:"path,omitempty"` // relative to the destination root
-	Status   string  `json:"status"`
-	Alt      string  `json:"alt,omitempty"`    // YouTube id downloaded instead of this one, in its slot
-	Lyrics   string  `json:"lyrics,omitempty"` // synced | plain
-	Error    string  `json:"error,omitempty"`
-	Fails    int     `json:"fails,omitempty"` // consecutive non-network failures
-	Local    bool    `json:"local,omitempty"` // imported file; never fetch its synthetic ID
+	Title      string  `json:"title"`
+	Artist     string  `json:"artist,omitempty"`
+	MediaURL   string  `json:"media_url,omitempty"`
+	Duration   float64 `json:"duration,omitempty"`
+	Path       string  `json:"path,omitempty"` // relative to the destination root
+	Status     string  `json:"status"`
+	Alt        string  `json:"alt,omitempty"`         // YouTube id downloaded instead of this one, in its slot
+	ResolvedID string  `json:"resolved_id,omitempty"` // confirmed audio id resolved for this track
+	Lyrics     string  `json:"lyrics,omitempty"`      // synced | plain
+	Error      string  `json:"error,omitempty"`
+	Fails      int     `json:"fails,omitempty"` // consecutive non-network failures
+	Local      bool    `json:"local,omitempty"` // imported file; never fetch its synthetic ID
 }
 
 type Manifest struct {
@@ -61,9 +64,9 @@ type SourceRequest struct {
 }
 
 type Entry struct {
-	ID, Title, MediaURL string
-	Duration            float64
-	Unavailable         bool
+	ID, Title, Artist, MediaURL string
+	Duration                    float64
+	Unavailable                 bool
 }
 
 func (m *Manifest) Source(id string) *Source {
@@ -103,16 +106,21 @@ func (m *Manifest) Merge(typ, id, title, url string, entries []Entry) *Source {
 			s.Tracks = append(s.Tracks, e.ID)
 		}
 		if m.Tracks[e.ID] == nil {
-			t := &Track{Title: e.Title, MediaURL: e.MediaURL, Duration: e.Duration, Status: StatusPending}
+			t := &Track{Title: e.Title, Artist: e.Artist, MediaURL: e.MediaURL, Duration: e.Duration, Status: StatusPending}
 			if e.Unavailable {
 				t.Status = StatusUnavailable
 			}
 			m.Tracks[e.ID] = t
-		} else if t := m.Tracks[e.ID]; e.MediaURL != "" {
-			if t.MediaURL == "" && t.Status == StatusUnavailable && !e.Unavailable {
-				t.Status = StatusPending
+		} else if t := m.Tracks[e.ID]; e.MediaURL != "" || e.Artist != "" {
+			if t.Artist == "" && e.Artist != "" {
+				t.Artist = e.Artist
 			}
-			t.MediaURL = e.MediaURL
+			if e.MediaURL != "" {
+				if t.MediaURL == "" && t.Status == StatusUnavailable && !e.Unavailable {
+					t.Status = StatusPending
+				}
+				t.MediaURL = e.MediaURL
+			}
 		}
 	}
 	if len(order) > len(s.Tracks) {
@@ -175,17 +183,27 @@ func (m *Manifest) Pending(sourceIDs []string) []string {
 
 // AlbumOf returns the album title and track number if the track belongs to a saved album.
 func (m *Manifest) AlbumOf(trackID string) (string, int) {
+	title, _, n := m.AlbumInfoOf(trackID)
+	return title, n
+}
+
+// AlbumInfoOf returns the album title, album artist and track number if the track belongs to a saved album.
+func (m *Manifest) AlbumInfoOf(trackID string) (string, string, int) {
 	for _, s := range m.Sources {
 		if s.Type != "album" {
 			continue
 		}
 		for i, id := range s.TrackOrder() {
 			if id == trackID {
-				return s.Title, i + 1
+				albumArtist := s.AlbumArtist
+				if albumArtist == "" && s.Creator != "" && !strings.Contains(s.Creator, ",") {
+					albumArtist = s.Creator
+				}
+				return s.Title, albumArtist, i + 1
 			}
 		}
 	}
-	return "", 0
+	return "", "", 0
 }
 
 func (m *Manifest) Count(s *Source) (done, total, unavailable int) {

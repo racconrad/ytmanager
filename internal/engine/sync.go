@@ -30,6 +30,7 @@ func (e *Engine) runDownloads(ctx context.Context, urls []string, refresh bool, 
 	}
 	e.running, e.accepting, e.more = true, true, make(chan struct{}, 1)
 	e.physicalIndex = nil
+	e.physicalFiles = nil
 	e.mu.Unlock()
 	defer func() {
 		e.mu.Lock()

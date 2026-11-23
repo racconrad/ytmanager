@@ -12,7 +12,7 @@ import (
 )
 
 // download enriches the info-json (artist, album, track number, lyrics) and hands it to yt-dlp.
-func (e *Engine) download(ctx context.Context, sourceID, referenceID, provider string, res TrackResolution, album string, n int, format, root string, stage func(string), progress func(float64)) (string, string, error) {
+func (e *Engine) download(ctx context.Context, sourceID, referenceID, provider string, res TrackResolution, album, albumArtist string, n int, format, root string, stage func(string), progress func(float64)) (string, string, error) {
 	stage("Reading metadata")
 	info, err := ytdlp.Info(ctx, res.TargetURL, e.opt.Cookies)
 	if err != nil {
@@ -28,7 +28,7 @@ func (e *Engine) download(ctx context.Context, sourceID, referenceID, provider s
 	ref := ytdlp.TrackReference(refURL, referenceID)
 	info["meta_purl"], info["meta_comment"] = ref, ref
 	e.prepareProviderInfo(provider, info)
-	artist, title := tag(info, album, n, e.opt)
+	artist, title := tagAlbum(info, album, albumArtist, n, e.opt)
 	dur, _ := info["duration"].(float64)
 	if res.LyricsID == "" {
 		e.mu.Lock()

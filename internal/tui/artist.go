@@ -349,6 +349,9 @@ func (m model) artistKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if listing.Creator == "" {
 					listing.Creator = target.Artist
 				}
+				if listing.AlbumArtist == "" {
+					listing.AlbumArtist = target.Artist
+				}
 			}
 			return inspectLoadedMsg{eng: eng, from: screenArtist, url: target.URL, listing: listing, save: saveOnly, err: err}
 		}

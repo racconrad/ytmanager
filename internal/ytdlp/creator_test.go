@@ -47,3 +47,18 @@ func TestListingCreator(t *testing.T) {
 		})
 	}
 }
+
+func TestListingAlbumArtistPicksOwnerOverCollaborators(t *testing.T) {
+	data := `{"_type":"playlist","id":"OLAK5uy_test","title":"Album - Collab Record","entries":[
+		{"id":"t1","artists":["Guest A","Main Artist"]},
+		{"id":"t2","artists":["Main Artist"]},
+		{"id":"t3","artists":["Main Artist","Guest B"]}
+	]}`
+	l, err := parseListing([]byte(data), "https://music.youtube.com/playlist?list=OLAK5uy_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.AlbumArtist != "Main Artist" {
+		t.Fatalf("album artist = %q, want Main Artist", l.AlbumArtist)
+	}
+}

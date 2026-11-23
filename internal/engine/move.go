@@ -118,6 +118,9 @@ func (e *Engine) move(ctx context.Context, id string, emit func(Event)) bool {
 		if tags["title"] == "" {
 			tags["title"] = title
 		}
+		e.mu.Lock()
+		enrichAlbumTags(e.m, id, tags)
+		e.mu.Unlock()
 		rel, err = ytdlp.Name(ctx, tags, strings.TrimPrefix(filepath.Ext(old), "."), e.opt.Folders)
 	}
 	if ctx.Err() != nil {

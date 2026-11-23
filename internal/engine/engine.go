@@ -80,7 +80,9 @@ type Engine struct {
 	resolveSong   func(context.Context, string) (string, error)                 // nil uses YouTube Music
 	providers     map[string]TrackProvider
 	physicalIndex map[string][]string // embedded source IDs, cached for one sync
-	presence      map[string]bool     // refreshed by scans and operations, never poll USB in each render
+	physicalFiles []physicalCandidate // readable audio files without embedded IDs, cached for one sync
+	activeDL      map[string]chan struct{}
+	presence      map[string]bool // refreshed by scans and operations, never poll USB in each render
 	probes        *probeCache
 	scanDone      atomic.Int64
 	scanTotal     atomic.Int64

@@ -40,6 +40,9 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 		if t.Alt != "" {
 			bySource[t.Alt] = append(bySource[t.Alt], bySource[id]...)
 		}
+		if t.ResolvedID != "" && t.ResolvedID != id {
+			bySource[t.ResolvedID] = append(bySource[t.ResolvedID], bySource[id]...)
+		}
 	}
 	e.mu.Unlock()
 	var rows []LibraryTrack
@@ -326,7 +329,7 @@ func markDuplicates(rows []LibraryTrack) {
 		}
 	}
 	for key, group := range titles {
-		if len(group) < 2 {
+		if !hasDistinctPaths(rows, group) {
 			continue
 		}
 		for _, i := range group {
@@ -336,7 +339,7 @@ func markDuplicates(rows []LibraryTrack) {
 		}
 	}
 	for hash, group := range hashes {
-		if len(group) < 2 {
+		if !hasDistinctPaths(rows, group) {
 			continue
 		}
 		for _, i := range group {
@@ -345,6 +348,19 @@ func markDuplicates(rows []LibraryTrack) {
 			rows[i].Note += " · Identical file bytes (SHA-256)"
 		}
 	}
+}
+
+func hasDistinctPaths(rows []LibraryTrack, indices []int) bool {
+	if len(indices) < 2 {
+		return false
+	}
+	first := strings.ToLower(filepath.Clean(rows[indices[0]].Path))
+	for _, idx := range indices[1:] {
+		if strings.ToLower(filepath.Clean(rows[idx].Path)) != first {
+			return true
+		}
+	}
+	return false
 }
 
 func codecMatchesExtension(codec, ext string) bool {

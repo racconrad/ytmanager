@@ -19,8 +19,8 @@ type Entry struct {
 }
 
 type Listing struct {
-	Type, ID, Title, Creator, Cover, Year string
-	Entries                               []Entry
+	Type, ID, Title, Creator, AlbumArtist, Cover, Year string
+	Entries                                            []Entry
 }
 
 type rawListing struct {
@@ -131,5 +131,6 @@ func parseListing(out []byte, raw string) (*Listing, error) {
 		l.Entries = append(l.Entries, e)
 	}
 	l.Creator = listingCreator(l.Type, r.creatorMetadata, l.Entries)
+	l.AlbumArtist = listingAlbumArtist(l.Type, r.creatorMetadata, l.Entries)
 	return l, nil
 }
