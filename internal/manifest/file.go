@@ -10,6 +10,62 @@ import (
 	"strings"
 )
 
+// Summary reports the manifest counts stored in data.music without inspecting audio files.
+type Summary struct {
+	Format    string
+	Sources   int
+	Albums    int
+	Playlists int
+	Tracks    int
+	Saved     int
+	Pending   int
+	Failed    int
+	Queued    int
+}
+
+// Summarize reads data.music (or its backup) if present in root without creating or modifying files.
+func Summarize(root string) (Summary, bool) {
+	p := filepath.Join(root, FileName)
+	m, _ := read(root, p)
+	if m == nil {
+		m, _ = read(root, p+".bak")
+	}
+	if m == nil {
+		return Summary{}, false
+	}
+	s := Summary{
+		Format:  m.Format,
+		Sources: len(m.Sources),
+		Queued:  len(m.Queue),
+	}
+	if s.Format == "" {
+		s.Format = "opus"
+	}
+	for _, src := range m.Sources {
+		switch src.Type {
+		case "album":
+			s.Albums++
+		case "playlist", "mix":
+			s.Playlists++
+		}
+	}
+	for _, t := range m.Tracks {
+		if t == nil || t.Status == StatusRemoved {
+			continue
+		}
+		s.Tracks++
+		switch t.Status {
+		case StatusDone:
+			s.Saved++
+		case StatusPending:
+			s.Pending++
+		case StatusFailed:
+			s.Failed++
+		}
+	}
+	return s, true
+}
+
 // Load reads data.music from root, falling back to the backup copy that Save keeps on MTP.
 // A destination without either starts empty.
 func Load(root string) (*Manifest, error) {

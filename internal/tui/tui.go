@@ -16,6 +16,7 @@ import (
 
 	"ytmanager/internal/device"
 	"ytmanager/internal/engine"
+	"ytmanager/internal/manifest"
 )
 
 type screen int
@@ -59,6 +60,9 @@ type model struct {
 	mounts         []device.Mount
 	browse         string // folder shown in screenBrowse
 	dirs           []string
+	browseStats    manifest.Summary
+	browseHasStats bool
+	browseSubStats map[string]manifest.Summary
 	browseReturn   bool
 	browseFrom     screen
 	browseCursor   int

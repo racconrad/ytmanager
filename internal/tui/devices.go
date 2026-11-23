@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ytmanager/internal/device"
+	"ytmanager/internal/manifest"
 )
 
 // Device list: one row per mount plus "Other path…" at the end.
@@ -65,9 +66,32 @@ func (m *model) openBrowser(p string) {
 		return
 	}
 	m.dirs = m.dirs[:0]
+	hasManifest := false
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			m.dirs = append(m.dirs, e.Name())
+		name := e.Name()
+		if name == manifest.FileName || name == manifest.FileName+".bak" {
+			hasManifest = true
+		}
+		if e.IsDir() && !strings.HasPrefix(name, ".") {
+			m.dirs = append(m.dirs, name)
+		}
+	}
+	m.browseStats, m.browseHasStats = manifest.Summary{}, false
+	if hasManifest {
+		m.browseStats, m.browseHasStats = manifest.Summarize(p)
+	}
+	m.browseSubStats = nil
+	if !device.IsMTP(p) && len(m.dirs) <= 50 {
+		for _, name := range m.dirs {
+			subDir := filepath.Join(p, name)
+			if _, err := os.Stat(filepath.Join(subDir, manifest.FileName)); err == nil {
+				if sum, ok := manifest.Summarize(subDir); ok {
+					if m.browseSubStats == nil {
+						m.browseSubStats = map[string]manifest.Summary{}
+					}
+					m.browseSubStats[name] = sum
+				}
+			}
 		}
 	}
 	m.screen, m.browse, m.cursor = screenBrowse, p, 0

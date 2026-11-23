@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +41,42 @@ func TestRedesignFolderPickerKeepsUseActionAndCurrentPath(t *testing.T) {
 	m = press(m, "esc")
 	m.dirs, m.cursor = nil, 0
 	checkScreenContains(t, m, "› Use this folder", "Parent folder", "No subfolders", "u use folder")
+}
+
+func TestFolderPickerShowsStorageStatsBeforeLoading(t *testing.T) {
+	parent := t.TempDir()
+	libDir := filepath.Join(parent, "MusicLib")
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := manifest.Load(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib.Format = "m4a"
+	lib.Merge("album", "a1", "Discovery", "https://example.com/a1", []manifest.Entry{
+		{ID: "t1", Title: "One"},
+		{ID: "t2", Title: "Two"},
+	})
+	lib.Tracks["t1"].Status = manifest.StatusDone
+	if err := lib.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel()
+	m.width, m.height = 80, 24
+	m.openBrowser(parent)
+	// Move cursor to MusicLib subfolder (0=Use this folder, 1=Parent folder, 2=MusicLib)
+	m = press(m, "down", "down")
+	checkScreenContains(t, m, "MusicLib/", "m4a · 1 album · 1 saved · 1 pending")
+
+	// Enter MusicLib: stats show right below "Use this folder"
+	m = press(m, "enter")
+	checkScreenContains(t, m, "Saved storage · m4a · 1 album · 1 saved · 1 pending")
+
+	// Also fits safely at 30x12
+	m.width, m.height = 30, 12
+	_ = assertFits(t, m)
 }
 
 func TestRedesignSettingsShowsSectionsAndFocusedEffect(t *testing.T) {
