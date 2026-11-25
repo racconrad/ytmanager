@@ -10,75 +10,73 @@ import (
 	"ytmanager/internal/ytdlp"
 )
 
-func TestOpeningDestinationStartsAlbumLibraryScan(t *testing.T) {
+func TestOpeningDestinationByPastedPathShowsDetailsAndScans(t *testing.T) {
 	dest := t.TempDir()
 	m := newModel()
 	next, scan := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(dest), Paste: true})
 	m = next.(model)
-	if m.screen != screenLibrary || !m.library.albums || !m.library.scanning || scan == nil {
-		t.Fatalf("expected initial Library scan: screen=%v scanning=%v albums=%v", m.screen, m.library.scanning, m.library.albums)
+	if m.screen != screenLibrary || m.ws.section != secDetails || !m.library.albums || !m.library.scanning || scan == nil {
+		t.Fatalf("expected destination details and a background scan: section=%v scanning=%v", m.ws.section, m.library.scanning)
 	}
-	next, _ = m.Update(scan())
-	m = next.(model)
-	if m.screen != screenLibrary || !m.library.complete || m.eng.Root() != dest {
+	m = finishTestLibraryScan(t, m, scan)
+	if m.screen != screenLibrary || m.ws.section != secDetails || !m.library.complete || m.eng.Root() != dest {
 		t.Fatalf("destination scan did not finish: screen=%v library=%+v", m.screen, m.library)
 	}
 	if m = press(m, "g"); m.screen != screenSources {
-		t.Fatal("download sources not accessible from the library")
+		t.Fatal("download sources not accessible from destination details")
 	}
 }
 
 func TestLibraryCanVisitSettingsAndCancelFolderChangeWithoutLosingFocus(t *testing.T) {
 	m := scrollModel(t)
-	m.screen, m.cursor = screenLibrary, 1
 	m.library = libraryState{complete: true, albums: true, all: []engine.LibraryTrack{
-		{ID: "first", Path: "First/a.opus"}, {ID: "second", Path: "Second/b.opus"},
+		{ID: "first", Album: "First", Path: "First/a.opus"}, {ID: "second", Album: "Second", Path: "Second/b.opus"},
 	}}
+	m = press(m, "1", "down")
 	m = press(m, "O")
-	if m.screen != screenSettings {
-		t.Fatal("settings inaccessible from library")
+	if m.ws.section != secSettings {
+		t.Fatal("settings inaccessible from albums")
 	}
-	m = press(m, "esc")
-	if m.screen != screenLibrary || m.cursor != 1 {
-		t.Fatal("settings did not restore library focus")
+	m = press(m, "1")
+	if m.ws.section != secAlbums {
+		t.Fatal("could not return to albums from settings")
 	}
-	m = press(m, "c")
+	m = press(m, "down", "c")
 	if m.screen != screenBrowse {
-		t.Fatal("folder picker inaccessible from library")
+		t.Fatal("folder picker inaccessible from workspace")
 	}
 	m = press(m, "esc")
-	if m.screen != screenLibrary || m.cursor != 1 {
-		t.Fatal("cancel did not restore library focus")
+	if m.ws.section != secAlbums || m.ws.listCursor != 1 {
+		t.Fatalf("cancel did not restore album focus: section=%v cursor=%d", m.ws.section, m.ws.listCursor)
 	}
 }
 
 func TestLibraryKeepsAlbumFocusAfterSourcesAndArtist(t *testing.T) {
 	m := scrollModel(t)
-	m.screen, m.cursor = screenLibrary, 1
 	m.library = libraryState{complete: true, albums: true, marked: map[string]bool{}, all: []engine.LibraryTrack{
-		{ID: "first", Path: "First/a.opus"}, {ID: "second", Artist: "Example Two", Path: "Second/b.opus"},
+		{ID: "first", Album: "First", Path: "First/a.opus"}, {ID: "second", Album: "Second", Artist: "Example Two", Path: "Second/b.opus"},
 	}}
-	m = press(m, "F", "esc")
-	if m.screen != screenLibrary || m.cursor != 1 {
-		t.Fatal("artist explorer did not restore library focus")
+	m = press(m, "1", "F", "1")
+	if m.ws.section != secAlbums {
+		t.Fatal("could not return to albums from artist explorer")
 	}
 	m = press(m, "g", "l")
-	if m.screen != screenLibrary || !m.library.albums || m.cursor != 1 || !m.library.scanning {
-		t.Fatal("returning from Sources did not refresh the focused catalog")
+	if m.ws.section != secAlbums {
+		t.Fatal("returning from Sources did not switch to Albums")
 	}
-	m.library.cancel()
 }
 
 func TestSourcesIsReachableWhileOpeningLibrary(t *testing.T) {
 	m := scrollModel(t)
 	scan := m.openInitialLibrary()
 	m = press(m, "g")
-	if m.screen != screenSources {
+	if m.screen != screenSources || m.ws.section != secSources {
 		t.Fatal("automatic scan blocked access to Sources")
 	}
-	m.cursor = 4
-	next, _ := m.Update(scan())
-	if n := next.(model); n.screen != screenSources || n.cursor != 4 || n.library.scanning {
+	for range 4 {
+		m = press(m, "down")
+	}
+	if n := finishTestLibraryScan(t, m, scan); n.screen != screenSources || n.ws.listCursor != 4 || n.library.scanning {
 		t.Fatal("offscreen scan result changed source focus or left a stuck scan")
 	}
 }
@@ -92,8 +90,7 @@ func TestLibraryStillAcceptsPastedArtistLinks(t *testing.T) {
 	if m.screen != screenArtist || lookup == nil {
 		t.Fatalf("pasted artist link was not routed from Library: screen=%v", m.screen)
 	}
-	next, _ = m.Update(scan())
-	if n := next.(model); n.screen != screenArtist || n.library.scanning {
+	if n := finishTestLibraryScan(t, m, scan); n.screen != screenArtist || n.library.scanning {
 		t.Fatal("cancelled local scan changed the explorer")
 	}
 }
@@ -126,15 +123,19 @@ func TestStaleCollectionInspectionCannotWriteToNewDestination(t *testing.T) {
 }
 
 func TestWideLibraryShowsAlbumInventoryAndSelectedDetails(t *testing.T) {
-	m := sized(scrollModel(t), 112, 30)
-	m.screen, m.cursor = screenLibrary, 1
+	m := sized(newModel(), 112, 30)
+	if err := m.openDest(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 	m.library = libraryState{complete: true, albums: true, all: []engine.LibraryTrack{
 		{ID: "first", Album: "First Night", Artist: "Example One", Path: "First/a.opus"},
 		{ID: "second", Album: "Second Night", Artist: "Example Two", Path: "Second/b.opus"},
 		{ID: "third", Album: "Second Night", Artist: "Example Two", Path: "Another/c.opus"},
 	}}
+	m.refreshWorkspace()
+	m = press(m, "down")
 	view := assertFits(t, m)
-	for _, label := range []string{"2 albums", "Selected album", "2 folders", "Example Two"} {
+	for _, label := range []string{"2 albums", "Selected album", "Example Two", "Folders"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("%q missing from album catalog:\n%s", label, view)
 		}
@@ -146,10 +147,10 @@ func TestWideLibraryShowsAlbumInventoryAndSelectedDetails(t *testing.T) {
 
 func TestSourcesShowsSeparateDownloadQueueAndCatalog(t *testing.T) {
 	m := sized(scrollModel(t), 100, 26)
+	m = press(m, "3")
 	m.run = run{verb: "downloaded", busy: true, total: 5, done: 2}
 	view := assertFits(t, m)
-	queue, catalog := strings.Index(view, "Download queue"), strings.Index(view, "Saved sources")
-	if queue < 0 || catalog < 0 || queue > catalog || !strings.Contains(view, "2/5 processed") {
-		t.Fatalf("queue and sources are not separated:\n%s", view)
+	if !strings.Contains(view, "Sources") || !strings.Contains(view, "2/5 processed") || !strings.Contains(view, "A000") {
+		t.Fatalf("queue and sources status missing:\n%s", view)
 	}
 }

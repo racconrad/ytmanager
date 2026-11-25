@@ -58,7 +58,7 @@ func (m *model) refreshArtistCatalog() {
 	}
 	albums, saved := m.eng.InstalledCatalog()
 	m.artist.installedAlbums = albums
-	m.artist.installedSrcs = m.eng.Snapshot()
+	m.artist.installedSrcs = m.eng.CatalogSources()
 	m.artist.saved = saved
 }
 
@@ -74,6 +74,11 @@ func (m *model) enterArtist(state artistState) {
 	}
 	state.marked = map[string]bool{}
 	m.screen, m.cursor, m.artist = screenArtist, 0, state
+	m.ws.section = secArtists
+	m.ws.menuCursor = int(secArtists)
+	m.ws.listCursor = 0
+	m.ws.sideCursor = 0
+	m.ws.focus = paneList
 	m.refreshArtistCatalog()
 }
 
@@ -366,6 +371,12 @@ func (m model) artistKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			delete(m.artist.marked, r.URL)
 		}
 		m.screen, m.cursor = screenSources, 0
+		m.ws.section = secSources
+		m.ws.menuCursor = int(secSources)
+		m.ws.listCursor = 0
+		m.ws.sourceID = ""
+		m.ws.sideCursor = 0
+		m.ws.focus = paneList
 		return m, m.add(urls)
 	}
 	return m, m.requestCover(m.artistHighlightedCover())

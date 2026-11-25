@@ -33,6 +33,11 @@ func Summarize(root string) (Summary, bool) {
 	if m == nil {
 		return Summary{}, false
 	}
+	return m.Summary(), true
+}
+
+// Summary counts the saved catalog without reading the destination's audio.
+func (m *Manifest) Summary() Summary {
 	s := Summary{
 		Format:  m.Format,
 		Sources: len(m.Sources),
@@ -49,8 +54,9 @@ func Summarize(root string) (Summary, bool) {
 			s.Playlists++
 		}
 	}
-	for _, t := range m.Tracks {
-		if t == nil || t.Status == StatusRemoved {
+	referenced := m.ReferencedTracks()
+	for id, t := range m.Tracks {
+		if t == nil || t.Status == StatusRemoved || (!referenced[id] && t.Path == "") {
 			continue
 		}
 		s.Tracks++
@@ -58,12 +64,16 @@ func Summarize(root string) (Summary, bool) {
 		case StatusDone:
 			s.Saved++
 		case StatusPending:
-			s.Pending++
+			if referenced[id] {
+				s.Pending++
+			}
 		case StatusFailed:
-			s.Failed++
+			if referenced[id] {
+				s.Failed++
+			}
 		}
 	}
-	return s, true
+	return s
 }
 
 // Load reads data.music from root, falling back to the backup copy that Save keeps on MTP.
@@ -100,6 +110,17 @@ func read(root, p string) (*Manifest, error) {
 	}
 	if m.Tracks == nil {
 		m.Tracks = map[string]*Track{}
+	}
+	deleted := map[string]bool{}
+	for id, track := range m.Tracks {
+		if track != nil && track.PermanentlyRemoved {
+			deleted[id] = true
+		}
+	}
+	if len(deleted) > 0 {
+		for _, source := range m.Sources {
+			source.DropTracks(deleted)
+		}
 	}
 	return m, nil
 }

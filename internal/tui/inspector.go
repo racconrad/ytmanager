@@ -31,7 +31,7 @@ func (m *model) renderWithCoverPanel(b *strings.Builder, w int, rows []string, c
 			// First right cell after the list, gap and panel border.
 			m.nextCover = &coverPlacement{key: coverKey, img: img, row: headerRows + 2, col: listW + 7, cols: cols, rows: artHeight}
 		} else {
-			right = renderCoverArt(img, cols, artHeight)
+			right = m.renderedCover(coverKey, img, cols, artHeight)
 		}
 	}
 	for _, line := range meta {

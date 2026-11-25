@@ -29,7 +29,7 @@ func (e *Engine) readSource(ctx context.Context, request manifest.SourceRequest,
 	}
 
 	e.mu.Lock()
-	if source := e.sourceForURL(request.URL); !request.Refresh && source != nil && len(source.Tracks) > 0 {
+	if source := e.sourceForURL(request.URL); !request.Refresh && sourceCached(source) {
 		id, title, settled := source.ID, source.Title, e.sourceSettled(source)
 		e.completeRequest(request.URL)
 		err := e.m.Save()
@@ -63,12 +63,12 @@ func (e *Engine) readSource(ctx context.Context, request manifest.SourceRequest,
 	source := e.mergeSourceListing(listing, request.URL)
 	e.completeRequest(request.URL)
 	err = e.m.Save()
-	id := source.ID
+	id, count := source.ID, len(source.Tracks)
 	e.mu.Unlock()
 	if err != nil {
 		return fail(fmt.Errorf("could not save data.music: %w", err))
 	}
-	emit(Event{Kind: EvLog, Msg: fmt.Sprintf("Queued %s (%s)", listing.Title, tracks(len(listing.Entries)))})
+	emit(Event{Kind: EvLog, Msg: fmt.Sprintf("Queued %s (%s)", listing.Title, tracks(count))})
 	return sourceResult{ids: []string{id}}
 }
 

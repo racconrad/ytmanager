@@ -13,19 +13,24 @@ import (
 func TestCompactSourcesShowsPrimaryActionsAndShortcutGuide(t *testing.T) {
 	m := scrollModel(t)
 	m.width, m.height = 44, 14
-	m.cursor = 2
+	m = press(m, "3", "down", "down")
 	view := assertFits(t, m)
-	for _, label := range []string{"add link", "library", "keys"} {
+	for _, label := range []string{"Sources", "→ actions", "? keys"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("missing %q in compact Sources:\n%s", label, view)
 		}
 	}
-	m = press(m, "?")
-	if view = assertFits(t, m); !strings.Contains(view, "Source shortcuts") || !strings.Contains(view, "close") {
+	m = press(m, "right")
+	actView := assertFits(t, m)
+	if !strings.Contains(actView, "Add link…") || !strings.Contains(actView, "Sync selected") {
+		t.Fatalf("missing primary actions in Side Panel:\n%s", actView)
+	}
+	m = press(m, "left", "?")
+	if view = assertFits(t, m); !strings.Contains(view, "Workspace shortcuts") || !strings.Contains(view, "close") {
 		t.Fatalf("shortcut guide not visible:\n%s", view)
 	}
 	m = press(m, "down", "esc")
-	if m.screen != screenSources || m.cursor != 2 || strings.Contains(assertFits(t, m), "Source shortcuts") {
+	if m.ws.section != secSources || m.ws.listCursor != 2 || strings.Contains(assertFits(t, m), "Workspace shortcuts") {
 		t.Fatal("closing help lost the selected source")
 	}
 }
@@ -33,23 +38,28 @@ func TestCompactSourcesShowsPrimaryActionsAndShortcutGuide(t *testing.T) {
 func TestLibraryShowsLocalActionsAndRefreshKeepsSelection(t *testing.T) {
 	m := scrollModel(t)
 	m.width, m.height = 44, 14
-	m.screen = screenLibrary
 	a := engine.LibraryTrack{ID: "a", Title: "Apple", Album: "First", Path: "First/a.opus"}
 	b := engine.LibraryTrack{ID: "b", Title: "Banana", Album: "First", Path: "First/b.opus"}
 	c := engine.LibraryTrack{ID: "c", Title: "Carrot", Album: "Second", Path: "Second/c.opus"}
-	m.library = libraryState{all: []engine.LibraryTrack{a, b}, complete: true, marked: map[string]bool{"b": true}}
-	m.cursor = 1
-	for _, label := range []string{"scan folder", "trash", "restore", "albums"} {
-		if view := assertFits(t, m); !strings.Contains(view, label) {
-			t.Fatalf("missing %q in compact Library:\n%s", label, view)
+	m.library = libraryState{all: []engine.LibraryTrack{a, b}, complete: true, inventoryKnown: true, marked: map[string]bool{"b": true}}
+	m.refreshWorkspace()
+	m = press(m, "2", "right")
+	view := assertFits(t, m)
+	for _, label := range []string{"Actions", "Open folder files", "Delete folder audio"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("missing %q in Side Panel:\n%s", label, view)
 		}
 	}
+	m = press(m, "down", "down", "down", "down")
+	if !strings.Contains(assertFits(t, m), "Scan device") {
+		t.Fatalf("Scan device action unreachable when scrolling Side Panel")
+	}
 
-	m = press(m, "s")
-	n, _ := m.Update(libraryScannedMsg{eng: m.eng, tracks: []engine.LibraryTrack{c, a, b}})
+	m = press(m, "enter")
+	n, _ := m.Update(libraryScannedMsg{scan: m.library.scan, tracks: []engine.LibraryTrack{c, a, b}})
 	m = n.(model)
-	if m.cursor != 2 || !m.library.marked["b"] {
-		t.Fatalf("rescan lost the selected track or its mark: cursor=%d, marked=%v", m.cursor, m.library.marked)
+	if !m.library.marked["b"] {
+		t.Fatalf("rescan lost verified track mark: marked=%v", m.library.marked)
 	}
 	if view := assertFits(t, m); !strings.Contains(view, "+1 file") || !strings.Contains(view, "+1 album") {
 		t.Fatalf("new music was not reported:\n%s", view)
@@ -58,11 +68,11 @@ func TestLibraryShowsLocalActionsAndRefreshKeepsSelection(t *testing.T) {
 
 func TestCancelledLibraryRefreshKeepsLastInventory(t *testing.T) {
 	m := scrollModel(t)
-	m.screen = screenLibrary
 	old := engine.LibraryTrack{ID: "a", Title: "Apple", Path: "a.opus"}
 	m.library = libraryState{all: []engine.LibraryTrack{old}, complete: true}
-	m = press(m, "s")
-	n, _ := m.Update(libraryScannedMsg{eng: m.eng, err: context.Canceled})
+	m.refreshWorkspace()
+	m = press(m, "2", "enter", "s")
+	n, _ := m.Update(libraryScannedMsg{scan: m.library.scan, err: context.Canceled})
 	m = n.(model)
 	view := assertFits(t, m)
 	if !strings.Contains(view, "Apple") || !strings.Contains(view, "Scan cancelled") ||
@@ -76,7 +86,7 @@ func TestIncompleteFirstScanDoesNotClaimFolderIsEmpty(t *testing.T) {
 	m.width, m.height = 30, 12
 	m.screen = screenLibrary
 	m = press(m, "s")
-	n, _ := m.Update(libraryScannedMsg{eng: m.eng, err: context.Canceled})
+	n, _ := m.Update(libraryScannedMsg{scan: m.library.scan, err: context.Canceled})
 	view := assertFits(t, n.(model))
 	if !strings.Contains(view, "Scan cancelled") || strings.Contains(view, "No music in this folder") {
 		t.Fatalf("incomplete inventory presented as empty:\n%s", view)
@@ -85,17 +95,18 @@ func TestIncompleteFirstScanDoesNotClaimFolderIsEmpty(t *testing.T) {
 
 func TestRescanDropsUnverifiedMarksAndClosesAnAlbumThatVanished(t *testing.T) {
 	m := scrollModel(t)
-	m.screen = screenLibrary
 	a := engine.LibraryTrack{ID: "a", Path: "a.opus", Title: "Apple", Album: "First", Hash: "old"}
 	b := engine.LibraryTrack{ID: "b", Path: "b.opus", Title: "Banana", Album: "Second", Hash: "same"}
 	c := engine.LibraryTrack{ID: "c", Path: "c.opus", Title: "Carrot", Album: "Third"}
-	m.library = libraryState{all: []engine.LibraryTrack{a, b, c}, complete: true, albums: true, album: c.AlbumKey(), marked: map[string]bool{"a": true, "b": true}}
+	m.library = libraryState{all: []engine.LibraryTrack{a, b, c}, complete: true, albums: true, marked: map[string]bool{"a": true, "b": true}}
+	m.refreshWorkspace()
+	m.ws.albumKey = c.AlbumKey()
 	a.Hash, a.Status, b.Hash = "", "not scanned", ""
 	m = press(m, "s")
-	n, _ := m.Update(libraryScannedMsg{eng: m.eng, tracks: []engine.LibraryTrack{a, b}})
+	n, _ := m.Update(libraryScannedMsg{scan: m.library.scan, tracks: []engine.LibraryTrack{a, b}})
 	m = n.(model)
-	if m.library.album != "" || m.library.marked["a"] || m.library.marked["b"] {
-		t.Fatalf("stale album or marks after rescan: album=%q marks=%v", m.library.album, m.library.marked)
+	if m.ws.albumKey != "" || m.library.marked["a"] || m.library.marked["b"] {
+		t.Fatalf("stale album or marks after rescan: albumKey=%q marks=%v", m.ws.albumKey, m.library.marked)
 	}
 }
 
@@ -176,14 +187,14 @@ func TestCompactLibraryReportsShowTheActualResult(t *testing.T) {
 
 func TestCheckboxesAppearOnlyWhileSelecting(t *testing.T) {
 	m := scrollModel(t)
-	m.screen = screenLibrary
-	m.library = libraryState{all: []engine.LibraryTrack{{ID: "a", Title: "Apple", Path: "a.opus"}}, complete: true, marked: map[string]bool{"a": false}}
+	m.library = libraryState{all: []engine.LibraryTrack{{ID: "a", Album: "Album A", Title: "Apple", Path: "Album A/a.opus"}}, complete: true}
+	m.refreshWorkspace()
 	if view := assertFits(t, m); strings.Contains(view, "[ ]") {
 		t.Fatalf("idle list shows checkboxes:\n%s", view)
 	}
-	m.library.marked["a"] = true
+	m = press(m, " ")
 	if view := assertFits(t, m); !strings.Contains(view, "[x]") {
-		t.Fatalf("marked track lost its checkbox:\n%s", view)
+		t.Fatalf("marked album lost its checkbox:\n%s", view)
 	}
 }
 

@@ -28,6 +28,24 @@ func TestRedesignDevicePickerKeepsFreeSpaceAndReconnectVisible(t *testing.T) {
 	checkScreenContains(t, m, "Drive · Space unknown")
 }
 
+func TestDestinationPickerShowsTheNextActionBesideTheCassette(t *testing.T) {
+	m := sized(newModel(device.Mount{Path: "/media/Portable", Free: 2 << 30}), 96, 24)
+	m.recent = []device.Mount{{Path: "/media/Old music", Free: 1 << 30}}
+	checkScreenContains(t, m, "Choose a destination", "(o)---(o)", "Enter Open saved folder")
+	m = press(m, "down")
+	checkScreenContains(t, m, "› /media/Portable", "Enter Choose a folder", "2.0 GB free")
+	m = press(m, "down")
+	checkScreenContains(t, m, "› Other path", "Enter Type or paste a path")
+	m = sized(m, 30, 12)
+	view := assertFits(t, m)
+	if strings.Contains(view, "(o)---(o)") || !strings.Contains(view, "› Other path") ||
+		!strings.Contains(view, "enter type path") {
+		t.Fatalf("compact picker did not prioritize the selected row and its key:\n%s", view)
+	}
+	m = press(m, "up", "up")
+	checkScreenContains(t, m, "Recent · 1.0 GB free")
+}
+
 func TestRedesignFolderPickerKeepsUseActionAndCurrentPath(t *testing.T) {
 	m := newModel()
 	m.width, m.height, m.screen = 30, 12, screenBrowse
@@ -82,23 +100,27 @@ func TestFolderPickerShowsStorageStatsBeforeLoading(t *testing.T) {
 func TestRedesignSettingsShowsSectionsAndFocusedEffect(t *testing.T) {
 	m := scrollModel(t)
 	m.width, m.height, m.screen = 80, 30, screenSettings
-	checkScreenContains(t, m, "Settings", "Downloads", "Files and folders", "Format", "opus", "data.music")
+	checkScreenContains(t, m, "Settings", "Version:", "Format", "opus", "data.music")
 
 	m.width, m.height = 30, 12
 	m.cursor = 2
 	m.opt.Cookies = "chromium"
 	m.log("Keep this log")
-	checkScreenContains(t, m, "Downloads", "chromium", "Private playlists", "Keep this log")
-	m = press(m, "down", "down")
-	checkScreenContains(t, m, "Folders: Artist/Album", "Folder layout")
-	m.cursor = 10
-	checkScreenContains(t, m, "Files and folders", "Originals go to trash", "enter run")
+	checkScreenContains(t, m, "Settings", "chromium", "Keep this log")
+	m = press(m, "tab")
+	checkScreenContains(t, m, "Private playlists", "Actions")
+	m = press(m, "tab", "down", "down", "tab")
+	checkScreenContains(t, m, "Folder layout")
+	m = press(m, "tab")
+	m.ws.listCursor, m.cursor = 10, 10
+	m = press(m, "right")
+	checkScreenContains(t, m, "Originals go to trash")
 }
 
 func TestRedesignUnavailableTracksShowsSelectedReasonAndActions(t *testing.T) {
 	m := scrollModel(t)
 	m.width, m.height, m.screen = 30, 12, screenMissing
-	checkScreenContains(t, m, "Unavailable tracks", "No unavailable tracks")
+	checkScreenContains(t, m, "Review problems", "0 issues")
 
 	root := t.TempDir()
 	library, err := manifest.Load(root)
@@ -117,18 +139,20 @@ func TestRedesignUnavailableTracksShowsSelectedReasonAndActions(t *testing.T) {
 	if err := m.openDest(root); err != nil {
 		t.Fatal(err)
 	}
-	m.screen = screenMissing
-	m = press(m, "down")
+	m = press(m, "0")
+	checkScreenContains(t, m, "enter review")
+	m = press(m, "enter", "down")
 	m.log("Keep this log")
-	checkScreenContains(t, m, "› Faint Lines", "Glass Hours", "Alternative unavailable", "Region restricted", "enter set alternative", "r retry")
+	checkScreenContains(t, m, "› Unavailable · Faint Lines", "Region restricted")
+	checkScreenContains(t, m, "enter alternative")
 	m = press(m, "enter")
 	if m.altFor != "second" {
 		t.Fatal("alternative prompt opened for the wrong track")
 	}
-	checkScreenContains(t, m, "› Faint Lines", "Region restricted", "esc cancel")
+	checkScreenContains(t, m, "esc cancel")
 	m = press(m, "esc")
-	m.width, m.height = 72, 22
-	checkScreenContains(t, m, "Opening", "› Faint Lines", "Glass Hours", "Region restricted", "Use a YouTube Music link")
+	m.width, m.height = 78, 22
+	checkScreenContains(t, m, "Opening", "› Unavailable · Faint Lines", "Glass Hours", "Region restricted", "Set alternative link…")
 }
 
 func checkScreenContains(t *testing.T, m model, want ...string) {

@@ -37,7 +37,7 @@ func TestSourceCreators(t *testing.T) {
 	}
 
 	// Marking and syncing still use source identities, including equal titles.
-	m = press(m, "down", " ")
+	m = press(m, "3", "down", " ")
 	if urls := m.pickedURLs(m.eng.Snapshot()); len(urls) != 1 || !strings.HasSuffix(urls[0], "=two") {
 		t.Fatalf("marked sources = %v", urls)
 	}

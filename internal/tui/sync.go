@@ -160,6 +160,7 @@ func (m *model) apply(e engine.Event) {
 				break
 			}
 		}
+		m.refreshWorkspace()
 	}
 }
 
@@ -168,6 +169,7 @@ func (m *model) finish(err error) tea.Cmd {
 	r := m.run
 	if m.eng != nil {
 		m.eng.Resume() // never leave the next sync paused
+		m.refreshWorkspace()
 	}
 	m.run = run{jobs: map[string]*job{}, queue: r.queue}
 	switch {
@@ -176,13 +178,24 @@ func (m *model) finish(err error) tea.Cmd {
 		m.log(dim.Render("Cancelled. Whatever is left stays pending in data.music."))
 	case err != nil:
 		m.fail(err)
+		if r.failed > 0 || r.unavailable > 0 {
+			m.log(bad.Render(fmt.Sprintf("%d failed, %d unavailable (v or n to inspect)", r.failed, r.unavailable)))
+		}
+	case r.failed > 0:
+		msg := fmt.Sprintf("✗ Finished with errors: %d %s, %d failed", r.done, r.verb, r.failed)
+		if r.unavailable > 0 {
+			msg += fmt.Sprintf(", %d unavailable", r.unavailable)
+		}
+		msg += " (v or n to inspect)"
+		m.log(bad.Render(msg))
+		m.cat.celebrate(true, time.Now())
 	default:
-		msg := fmt.Sprintf("✓ Done: %d %s, %d errors", r.done, r.verb, r.failed)
+		msg := fmt.Sprintf("✓ Done: %d %s", r.done, r.verb)
 		if r.unavailable > 0 {
 			msg += fmt.Sprintf(", %d unavailable (n)", r.unavailable)
 		}
 		m.log(ok.Render(msg))
-		m.cat.celebrate(r.failed > 0, time.Now())
+		m.cat.celebrate(false, time.Now())
 	}
 	if len(m.run.queue) > 0 && m.eng != nil {
 		q := m.run.queue

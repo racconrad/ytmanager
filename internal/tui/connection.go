@@ -18,10 +18,20 @@ type lost struct {
 
 // detect runs every 2 s off the UI goroutine: mounts phones, refreshes the device list and checks
 // that the open folder still exists (os.Stat on a vanished gvfs mount can be slow).
-func detect(delay time.Duration, watched, lostPath string) tea.Cmd {
+func (m model) detect(delay time.Duration) tea.Cmd {
+	watched, lostPath := m.watched(), m.lostPath()
+	history, historyPath, startup := m.history, m.historyPath, m.startup
 	return tea.Tick(delay, func(time.Time) tea.Msg {
-		device.MountPhones()
-		msg := mountsMsg{list: device.List(), watched: watched, lostPath: lostPath}
+		if !startup {
+			device.MountPhones()
+		}
+		list, roots := device.List()
+		msg := mountsMsg{list: list, roots: roots, watched: watched, lostPath: lostPath}
+		if startup {
+			history = readDestinationHistory(historyPath)
+			msg.history = history
+		}
+		msg.recent = availableRecent(history, msg.list, msg.roots)
 		if watched != "" {
 			_, err := os.Stat(watched)
 			msg.gone = err != nil
@@ -89,7 +99,7 @@ func (m *model) reconnect() tea.Cmd {
 	m.lost = nil
 	m.log(ok.Render("✓ " + device.Label(l.path) + " is back."))
 	if len(l.urls) == 0 && !m.eng.HasPending() {
-		return m.openInitialLibrary()
+		return m.openDestinationDetails()
 	}
 	m.log(dim.Render("Resuming the download…"))
 	return m.download(l.urls)

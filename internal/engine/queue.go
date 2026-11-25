@@ -51,8 +51,12 @@ func (e *Engine) sourceForURL(raw string) *manifest.Source {
 	return nil
 }
 
+func sourceCached(source *manifest.Source) bool {
+	return source != nil && (len(source.Tracks) > 0 || len(source.Excluded) > 0 || !source.LastSync.IsZero())
+}
+
 func (e *Engine) sourceSettled(source *manifest.Source) bool {
-	if source == nil || len(source.Tracks) == 0 {
+	if !sourceCached(source) {
 		return false
 	}
 	for _, id := range source.Tracks {

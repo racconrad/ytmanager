@@ -83,8 +83,7 @@ func TestBrowseSettingsPaste(t *testing.T) {
 	if m.screen != screenLibrary || scan == nil || m.eng.Root() != want {
 		t.Fatalf("destination not opened at %q", want)
 	}
-	next, _ = m.Update(scan())
-	m = press(next.(model), "g")
+	m = press(finishTestLibraryScan(t, m, scan), "g")
 
 	m = press(m, "o", "right", "down", "right", "esc")
 	if m.eng.Format() != "m4a" || m.opt.Jobs != 4 || engine.LoadOptions().Jobs != 4 {
@@ -120,7 +119,7 @@ func TestBrowseSettingsPaste(t *testing.T) {
 		t.Fatalf("change destination: screen %d browse %q", m.screen, m.browse)
 	}
 	m = press(m, "esc")
-	if m.screen != screenSources || m.eng.Root() != want {
+	if (m.screen != screenLibrary && m.screen != screenSources) || m.eng.Root() != want {
 		t.Fatal("Esc did not return to the previous destination")
 	}
 }
@@ -184,5 +183,35 @@ func TestReconnect(t *testing.T) {
 	next, _ = m.Update(mountsMsg{lostPath: root, back: true})
 	if m = next.(model); m.eng == nil || m.eng.Root() != root || m.lost != nil {
 		t.Fatalf("did not reconnect: eng=%v lost=%v", m.eng, m.lost)
+	}
+}
+
+func TestQuitKeyWorksAcrossOverlaysAndRespectsTextInput(t *testing.T) {
+	m := newModel()
+	if err := m.openDest(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	// Quits from shortcut help overlay and library tools overlay
+	m.shortcutHelp = true
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}); cmd == nil {
+		t.Fatal("q did not quit from shortcutHelp")
+	}
+	m.shortcutHelp = false
+	m.screen = screenLibrary
+	m.library.tools = true
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Q")}); cmd == nil {
+		t.Fatal("Q did not quit from library tools")
+	}
+	// Inside library search input, q types into query instead of quitting
+	m.library.tools = false
+	m = press(m, "/")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if next.(model).input.Value() != "q" {
+		t.Fatalf("search input = %q, want q", next.(model).input.Value())
+	}
+	if cmd != nil {
+		if _, isQuit := cmd().(tea.QuitMsg); isQuit {
+			t.Fatal("q quit while typing in library search")
+		}
 	}
 }

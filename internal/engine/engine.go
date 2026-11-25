@@ -54,13 +54,14 @@ type Event struct {
 }
 
 type SourceView struct {
-	ID, Type, Title, URL, Creator, Cover, Year string
-	Done, Total, Unavailable, Removed          int
+	ID, Type, Title, URL, Creator, Cover, Year                  string
+	Done, Total, Pending, Failed, Missing, Unavailable, Removed int
 }
 
-// MissingView is an unavailable track plus the first source it appears in.
+// MissingView is an unavailable or failed track plus the first source it appears in.
 type MissingView struct {
 	ID, Title, Source, URL, Alt, Error string
+	Failed                             bool
 }
 
 // Engine guards the manifest with a mutex because several download workers update it at once.
@@ -90,6 +91,14 @@ type Engine struct {
 
 // Open loads (or creates) the destination at root, which may be ~/… or an mtp:// URI.
 func Open(root string, opt Options) (*Engine, error) {
+	return open(root, opt, true)
+}
+
+func OpenExisting(root string, opt Options) (*Engine, error) {
+	return open(root, opt, false)
+}
+
+func open(root string, opt Options, create bool) (*Engine, error) {
 	root, err := device.Resolve(root)
 	if err != nil {
 		return nil, err
@@ -101,8 +110,18 @@ func Open(root string, opt Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, err
+	if create {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return nil, err
+		}
+	} else {
+		info, err := os.Stat(root)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("not a directory: %s", root)
+		}
 	}
 	m, err := manifest.Load(root)
 	if err != nil {
@@ -132,31 +151,56 @@ func (e *Engine) SetFormat(f string) error {
 	return e.m.Save()
 }
 
+func (e *Engine) SourceCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.m.Sources)
+}
+
 func (e *Engine) Snapshot() []SourceView {
+	return e.snapshot(e.trackPresent)
+}
+
+// CatalogSources reads saved source counts and cached presence without touching audio files.
+func (e *Engine) CatalogSources() []SourceView {
+	return e.snapshot(e.catalogTrackPresent)
+}
+
+func (e *Engine) snapshot(present func(*manifest.Track) bool) []SourceView {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := make([]SourceView, len(e.m.Sources))
 	for i, s := range e.m.Sources {
-		d, t, u := 0, len(s.Tracks), 0
+		var d, p, f, m, u, r int
 		for _, id := range s.Tracks {
 			if track := e.m.Tracks[id]; track != nil {
-				if track.Status == manifest.StatusDone && e.trackPresent(track) {
-					d++
-				}
-				if track.Status == manifest.StatusUnavailable {
+				switch track.Status {
+				case manifest.StatusDone:
+					if present(track) {
+						d++
+					} else {
+						m++
+					}
+				case manifest.StatusPending:
+					p++
+				case manifest.StatusFailed:
+					f++
+				case manifest.StatusUnavailable:
 					u++
+				case manifest.StatusRemoved:
+					r++
 				}
 			}
 		}
 		out[i] = SourceView{ID: s.ID, Type: s.Type, Title: s.Title, URL: s.URL, Creator: s.Creator,
-			Cover: s.Cover, Year: s.Year, Done: d, Total: t, Unavailable: u}
-		for _, id := range s.Tracks {
-			if track := e.m.Tracks[id]; track != nil && track.Status == manifest.StatusRemoved {
-				out[i].Removed++
-			}
-		}
+			Cover: s.Cover, Year: s.Year, Done: d, Total: len(s.Tracks), Pending: p, Failed: f, Missing: m, Unavailable: u, Removed: r}
 	}
 	return out
+}
+
+func (e *Engine) catalogTrackPresent(t *manifest.Track) bool {
+	present, known := e.presence[t.Path]
+	return t.Path != "" && (!known || present)
 }
 
 // trackPresent caches filesystem presence between explicit operations.
@@ -172,7 +216,45 @@ func (e *Engine) trackPresent(t *manifest.Track) bool {
 	return present
 }
 
-// Missing lists unavailable tracks in source order.
+// WarmPresence populates the filesystem presence cache asynchronously without holding e.mu during I/O.
+func (e *Engine) WarmPresence(ctx context.Context) {
+	e.mu.Lock()
+	root := e.m.Root
+	var tracks []manifest.Track
+	for _, t := range e.m.Tracks {
+		if t.Path != "" && t.Status != manifest.StatusRemoved {
+			tracks = append(tracks, *t)
+		}
+	}
+	e.mu.Unlock()
+	res := make(map[string]bool, len(tracks))
+	tmp := &manifest.Manifest{Root: root}
+	for i := range tracks {
+		if ctx.Err() != nil {
+			return
+		}
+		res[tracks[i].Path] = tmp.AudioPath(&tracks[i]) != ""
+	}
+	e.mu.Lock()
+	e.presence = res
+	e.mu.Unlock()
+}
+
+// SetPresenceFromScan updates the presence cache directly from scanned physical rows.
+func (e *Engine) SetPresenceFromScan(rows []LibraryTrack) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.presence == nil {
+		e.presence = map[string]bool{}
+	}
+	for _, r := range rows {
+		if r.Path != "" {
+			e.presence[r.Path] = !r.Missing
+		}
+	}
+}
+
+// Missing lists unavailable and failed tracks in source order.
 func (e *Engine) Missing() []MissingView {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -180,9 +262,9 @@ func (e *Engine) Missing() []MissingView {
 	var out []MissingView
 	for _, s := range e.m.Sources {
 		for _, id := range s.Tracks {
-			if t := e.m.Tracks[id]; (t.Status == manifest.StatusUnavailable || (t.Status == manifest.StatusFailed && e.isAlternativeError(t.Error))) && !seen[id] {
+			if t := e.m.Tracks[id]; t != nil && (t.Status == manifest.StatusUnavailable || t.Status == manifest.StatusFailed) && !seen[id] {
 				seen[id] = true
-				out = append(out, MissingView{id, t.Title, s.Title, s.URL, t.Alt, t.Error})
+				out = append(out, MissingView{id, t.Title, s.Title, s.URL, t.Alt, t.Error, t.Status == manifest.StatusFailed})
 			}
 		}
 	}

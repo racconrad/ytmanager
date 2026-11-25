@@ -43,6 +43,9 @@ func (r FileReport) Summary() string {
 	switch {
 	case r.Permanent:
 		add(r.Deleted, "permanently deleted")
+		if r.Deleted == 0 && r.Missing == 0 {
+			add(r.Tracks, "removed from lists")
+		}
 	case r.Changed > 0:
 		add(r.Deleted, "originals in trash")
 	default:
@@ -234,24 +237,17 @@ func (e *Engine) trashFiles(ctx context.Context, selected []LibraryTrack, reset 
 		selectedIDs[row.ID] = true
 	}
 	for _, row := range selected {
-		p := row.Path
+		p := filepath.Clean(row.Path)
 		if t := e.m.Tracks[row.ID]; t != nil {
-			if p != t.Path && p != e.m.AudioPath(t) {
+			if p != filepath.Clean(t.Path) && p != filepath.Clean(e.m.AudioPath(t)) {
 				return report, fmt.Errorf("path changed for %s; rescan before deleting", row.Title)
 			}
-		} else if row.ID != "file:"+p {
+		} else if row.ID != "file:"+row.Path && row.ID != "file:"+p && !row.Unmanaged {
 			return report, fmt.Errorf("unknown file: %s", p)
-		} else if row.SourceID != "" {
-			for id, t := range e.m.Tracks {
-				if (id == row.SourceID || t.Alt == row.SourceID) && t.Status != manifest.StatusRemoved && e.m.AudioPath(t) == "" {
-					return report, fmt.Errorf("run repair to relink this moved file before deleting it: %s", p)
-				}
-			}
 		}
 		if !safeAudioPath(p) {
 			return report, fmt.Errorf("unsafe audio path: %s", p)
 		}
-		p = filepath.Clean(p)
 		for id, t := range e.m.Tracks {
 			if filepath.Clean(t.Path) == p && t.Status != manifest.StatusRemoved && !selectedIDs[id] {
 				return report, fmt.Errorf("%s shares its file; select all entries for this path", p)
@@ -465,7 +461,7 @@ func (e *Engine) RestoreTrash(ctx context.Context) (FileReport, error) {
 			if item == nil {
 				return report, fmt.Errorf("invalid trash entry")
 			}
-			if item.Restored {
+			if item.Restored || e.blocksTrashRestore(item) {
 				continue
 			}
 			if item.Replacement != "" && !safeLibraryPath(item.Replacement) {
@@ -513,7 +509,7 @@ func (e *Engine) RestoreTrash(ctx context.Context) (FileReport, error) {
 				failures = append(failures, err)
 				break
 			}
-			if item.Restored {
+			if item.Restored || e.blocksTrashRestore(item) {
 				continue
 			}
 			if item.Replacement != "" {

@@ -50,6 +50,7 @@ type model struct {
 	screen     screen
 	eng        *engine.Engine // nil on screenDevices and screenBrowse
 	cursor     int
+	ws         workspaceState
 	library    libraryState
 	collection collectionState
 	artist     artistState
@@ -58,6 +59,12 @@ type model struct {
 	nextCover  *coverPlacement
 
 	mounts         []device.Mount
+	mountRoots     []string
+	recent         []device.Mount
+	history        []recentFolder
+	historyPath    string
+	startup        bool
+	opening        string
 	browse         string // folder shown in screenBrowse
 	dirs           []string
 	browseStats    manifest.Summary
@@ -130,6 +137,9 @@ type (
 	}
 	mountsMsg struct {
 		list       []device.Mount
+		recent     []device.Mount
+		history    []recentFolder
+		roots      []string
 		watched    string // folder that was open when checked
 		gone       bool   // it no longer exists: the device was unplugged
 		lostPath   string // unplugged destination that was checked
@@ -148,18 +158,21 @@ func Run(dest string, opt engine.Options, format string) error {
 	defer overlay.close()
 	m := model{
 		opt: opt, format: format, input: in, width: 80, height: 24,
-		bar:     progress.New(progress.WithGradient("#7c3aed", "#f0abfc"), progress.WithWidth(24)),
-		marked:  map[string]bool{},
-		run:     run{jobs: map[string]*job{}},
-		overlay: overlay,
+		bar:         progress.New(progress.WithGradient("#7c3aed", "#f0abfc"), progress.WithWidth(24)),
+		marked:      map[string]bool{},
+		run:         run{jobs: map[string]*job{}},
+		overlay:     overlay,
+		historyPath: destinationHistoryPath(),
 	}
 	if dest != "" {
+		m.history = readDestinationHistory(m.historyPath)
+		m.mountRoots = device.RemovableRoots()
 		if err := m.openDest(dest); err != nil {
 			return err
 		}
-		m.screen = screenLibrary
+		m.setSection(secDetails)
 	} else {
-		m.mounts = device.List()
+		m.startup = true
 	}
 	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(overlay)).Run()
 	if fm, ok := final.(model); ok && fm.run.cancel != nil {
@@ -176,13 +189,13 @@ func (m model) Init() tea.Cmd {
 	if m.screen == screenLibrary && m.eng != nil {
 		initial = func() tea.Msg { return startLibraryMsg{m.eng} }
 	}
-	return tea.Batch(catTick(), detect(0, m.watched(), ""), initial)
+	return tea.Batch(catTick(), m.detect(0), initial)
 }
 func (m model) viewSignature() string {
-	return fmt.Sprintf("%d:%v:%v:%v:%v:%v:%v:%v:%v:%v:%v:%v",
-		m.screen,
+	return fmt.Sprintf("%d:%d:%d:%s:%s:%s:%v:%v:%v:%v:%v:%v:%v:%v:%v:%v:%v:%v",
+		m.screen, m.ws.section, m.ws.focus, m.ws.albumKey, m.ws.folderDir, m.ws.sourceID,
 		m.artist.searching, m.artist.loading, m.artist.artist != nil,
-		m.library.tools, m.library.plan != nil, m.library.details != nil, m.library.report != nil, m.library.candidates != nil, m.library.albums,
+		m.library.tools, m.library.plan != nil, m.library.details != nil, m.library.report != nil, m.library.candidates != nil, m.library.confirm != nil, m.library.albums,
 		m.shortcutHelp,
 		m.libraryOverlayVisible(),
 	)
@@ -205,8 +218,19 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case libraryDiscoveredMsg:
+		if m.activeLibraryScan(msg.scan) {
+			if msg.scan.ctx.Err() == nil {
+				m.applyLibraryDiscovery(msg.rows)
+			}
+			return m, msg.scan.next
+		}
+		return m, nil
 	case libraryScannedMsg:
-		if msg.eng == m.eng && m.library.scanning {
+		if m.activeLibraryScan(msg.scan) {
+			if err := msg.scan.ctx.Err(); err != nil {
+				msg.err = err
+			}
 			if m.screen != screenLibrary {
 				cursor := m.cursor
 				m.cursor = m.library.catalogCursor
@@ -265,6 +289,8 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.library.complete = msg.scanErr == nil
 			if m.library.complete {
 				m.library.all, m.library.inventoryKnown = msg.tracks, true
+				m.library.allGen++
+				m.library.cachedValid = false
 				m.library.scanNotice = ""
 			} else {
 				m.library.scanNotice = "Scan incomplete"
@@ -272,12 +298,15 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.library.report = &msg.report
 			m.library.marked = map[string]bool{}
 			m.cursor = 0
+			m.refreshWorkspace()
 			m.log(msg.report.Summary())
 			if msg.err != nil {
 				m.fail(msg.err)
 			}
 		}
 		return m, nil
+	case workspaceRemovalMsg:
+		return m.finishWorkspaceRemoval(msg)
 	case coverOpenedMsg:
 		if msg.err != nil && (m.screen == screenCollection || m.screen == screenArtist) {
 			m.fail(fmt.Errorf("could not open cover: %w", msg.err))
@@ -334,6 +363,7 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.log(ok.Render("Saved metadata: " + msg.listing.Title))
+			m.refreshWorkspace()
 			m.collection = collectionState{id: id, sourceCursor: m.cursor, returnTo: m.screen}
 			return m, m.requestCover(msg.listing.Cover)
 		}
@@ -358,9 +388,18 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.mouse(msg)
 	case catTickMsg:
 		m.cat.frame++
-		return m, catTick()
+		if m.isAnimating() {
+			return m, catTick()
+		}
+		return m, idleTick()
 	case mountsMsg:
-		m.mounts = msg.list
+		delay := 2 * time.Second
+		m.mountRoots = msg.roots
+		m.replaceMounts(msg.list, msg.recent)
+		if m.startup {
+			m.history, m.startup = msg.history, false
+			delay = 0
+		}
 		if m.eng != nil && msg.watched == m.eng.Root() {
 			m.space, m.spaceKnown = msg.space, msg.spaceKnown
 		}
@@ -368,14 +407,20 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gone && msg.watched == m.watched() {
 			m.unplugged(msg.watched)
 		}
-		if m.screen == screenDevices {
-			m.cursor = min(m.cursor, len(m.mounts))
-		}
 		var cmd tea.Cmd
-		if msg.back && msg.lostPath == m.lostPath() {
+		if m.opening == "" && msg.back && msg.lostPath == m.lostPath() {
 			cmd = m.reconnect()
 		}
-		return m, tea.Batch(cmd, detect(2*time.Second, m.watched(), m.lostPath()))
+		return m, tea.Batch(cmd, m.detect(delay))
+	case recentOpenedMsg:
+		m.opening = ""
+		if msg.err != nil {
+			m.fail(msg.err)
+			return m, nil
+		}
+		m.acceptDestination(msg.destinationOpen)
+		cmd := m.openDestinationDetails()
+		return m, cmd
 	case eventMsg:
 		if msg.ch == m.run.ch {
 			m.apply(msg.Event)
@@ -396,41 +441,6 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openDest opens a destination and switches to the sources screen.
-func (m *model) openDest(p string) error {
-	eng, err := engine.Open(p, m.opt)
-	if err != nil {
-		return err
-	}
-	if m.format != "" {
-		if err := eng.SetFormat(m.format); err != nil {
-			return err
-		}
-	}
-	if m.library.cancel != nil {
-		m.library.cancel()
-	}
-	m.eng, m.screen, m.cursor, m.logs = eng, screenSources, 0, nil
-	m.logScroll = 0
-	m.shortcutHelp = false
-	m.library = libraryState{}
-	m.marked = map[string]bool{}
-	m.artist = artistState{}
-	m.collection = collectionState{}
-	m.browseReturn = false
-	m.space, err = device.Space(eng.Root())
-	m.spaceKnown = err == nil
-	m.lost = nil // opening any destination ends the wait for an unplugged one
-	return nil
-}
-
-func (m *model) use(p string) tea.Cmd {
-	if err := m.openDest(p); err != nil {
-		m.fail(err)
-		return nil
-	}
-	return m.openInitialLibrary()
-}
 func (m *model) log(s string) {
 	if m.logScroll > 0 {
 		m.logScroll += len(m.wrapLog(s))
@@ -439,7 +449,9 @@ func (m *model) log(s string) {
 	if len(m.logs) > logLimit {
 		m.logs = m.logs[len(m.logs)-logLimit:]
 	}
-	m.scrollLogs(0)
+	if m.logScroll > 0 {
+		m.scrollLogs(0)
+	}
 }
 
 func (m *model) fail(err error) { m.log(bad.Render("✗ " + err.Error())) }

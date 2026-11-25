@@ -95,7 +95,7 @@ func TestCatalogInspectorKeepsLastReleaseVisibleOnShortTerminals(t *testing.T) {
 	m.log("Library ready")
 	m = press(m, "end")
 	view := assertFits(t, m)
-	assertCatalogText(t, view, "› ○ Release 21", "Not saved", "▀", "v preview", "esc back")
+	assertCatalogText(t, view, "› ○ Release 21", "Not saved", "▀", "Preview tracks", "Broadcast")
 }
 
 func assertCatalogText(t *testing.T, view string, want ...string) {

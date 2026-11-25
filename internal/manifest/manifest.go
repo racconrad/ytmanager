@@ -5,6 +5,7 @@ package manifest
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,21 +32,24 @@ type Source struct {
 	LastSync    time.Time `json:"last_sync"`
 	Tracks      []string  `json:"tracks"`
 	Order       []string  `json:"order,omitempty"`
+
+	Excluded map[string]bool `json:"excluded,omitempty"`
 }
 
 type Track struct {
-	Title      string  `json:"title"`
-	Artist     string  `json:"artist,omitempty"`
-	MediaURL   string  `json:"media_url,omitempty"`
-	Duration   float64 `json:"duration,omitempty"`
-	Path       string  `json:"path,omitempty"` // relative to the destination root
-	Status     string  `json:"status"`
-	Alt        string  `json:"alt,omitempty"`         // YouTube id downloaded instead of this one, in its slot
-	ResolvedID string  `json:"resolved_id,omitempty"` // confirmed audio id resolved for this track
-	Lyrics     string  `json:"lyrics,omitempty"`      // synced | plain
-	Error      string  `json:"error,omitempty"`
-	Fails      int     `json:"fails,omitempty"` // consecutive non-network failures
-	Local      bool    `json:"local,omitempty"` // imported file; never fetch its synthetic ID
+	Title              string  `json:"title"`
+	Artist             string  `json:"artist,omitempty"`
+	MediaURL           string  `json:"media_url,omitempty"`
+	Duration           float64 `json:"duration,omitempty"`
+	Path               string  `json:"path,omitempty"` // relative to the destination root
+	Status             string  `json:"status"`
+	Alt                string  `json:"alt,omitempty"`         // YouTube id downloaded instead of this one, in its slot
+	ResolvedID         string  `json:"resolved_id,omitempty"` // confirmed audio id resolved for this track
+	Lyrics             string  `json:"lyrics,omitempty"`      // synced | plain
+	Error              string  `json:"error,omitempty"`
+	Fails              int     `json:"fails,omitempty"` // consecutive non-network failures
+	Local              bool    `json:"local,omitempty"` // imported file; never fetch its synthetic ID
+	PermanentlyRemoved bool    `json:"permanently_removed,omitempty"`
 }
 
 type Manifest struct {
@@ -98,6 +102,10 @@ func (m *Manifest) Merge(typ, id, title, url string, entries []Entry) *Source {
 		have[tid] = true
 	}
 	for _, e := range entries {
+		t := m.Tracks[e.ID]
+		if s.Excluded[e.ID] || (t != nil && t.PermanentlyRemoved) {
+			continue
+		}
 		if typ != "mix" {
 			order = append(order, e.ID)
 		}
@@ -105,13 +113,13 @@ func (m *Manifest) Merge(typ, id, title, url string, entries []Entry) *Source {
 			have[e.ID] = true
 			s.Tracks = append(s.Tracks, e.ID)
 		}
-		if m.Tracks[e.ID] == nil {
-			t := &Track{Title: e.Title, Artist: e.Artist, MediaURL: e.MediaURL, Duration: e.Duration, Status: StatusPending}
+		if t == nil {
+			t = &Track{Title: e.Title, Artist: e.Artist, MediaURL: e.MediaURL, Duration: e.Duration, Status: StatusPending}
 			if e.Unavailable {
 				t.Status = StatusUnavailable
 			}
 			m.Tracks[e.ID] = t
-		} else if t := m.Tracks[e.ID]; e.MediaURL != "" || e.Artist != "" {
+		} else if e.MediaURL != "" || e.Artist != "" {
 			if t.Artist == "" && e.Artist != "" {
 				t.Artist = e.Artist
 			}
@@ -135,6 +143,26 @@ func (s *Source) TrackOrder() []string {
 		return s.Order
 	}
 	return s.Tracks
+}
+
+func (s *Source) DropTracks(ids map[string]bool) {
+	dropped := func(id string) bool { return ids[id] }
+	if slices.ContainsFunc(s.Tracks, dropped) {
+		s.Tracks = slices.DeleteFunc(slices.Clone(s.Tracks), dropped)
+	}
+	if slices.ContainsFunc(s.Order, dropped) {
+		s.Order = slices.DeleteFunc(slices.Clone(s.Order), dropped)
+	}
+}
+
+func (m *Manifest) ReferencedTracks() map[string]bool {
+	ids := map[string]bool{}
+	for _, source := range m.Sources {
+		for _, id := range source.Tracks {
+			ids[id] = true
+		}
+	}
+	return ids
 }
 
 // Remove drops the source from the manifest; its audio stays because another source may share it.

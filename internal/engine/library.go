@@ -29,7 +29,62 @@ type LibraryTrack struct {
 }
 
 func (e *Engine) Library() []LibraryTrack {
+	out, removed, root := e.libraryRecords()
+	kept := out[:0]
+	for _, row := range out {
+		if row, keep := libraryTrackOnDisk(root, row, removed[row.ID]); keep {
+			kept = append(kept, row)
+		}
+	}
+	out = kept
+	sort.Slice(out, func(i, j int) bool {
+		a, b := strings.ToLower(out[i].Title), strings.ToLower(out[j].Title)
+		if a != b {
+			return a < b
+		}
+		return out[i].ID < out[j].ID
+	})
+	// Similar titles flag candidates only. Different editions or artists can match;
+	// the UI explicitly asks the user to compare them before deleting anything.
+	groups := map[string][]int{}
+	for i, t := range out {
+		key := strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				return unicode.ToLower(r)
+			}
+			return -1
+		}, t.Title)
+		if key != "" {
+			groups[key] = append(groups[key], i)
+		}
+	}
+	for _, group := range groups {
+		if len(group) < 2 {
+			continue
+		}
+		for a := 0; a < len(group); a++ {
+			for b := a + 1; b < len(group); b++ {
+				ia, ib := group[a], group[b]
+				if out[ia].Duration > 0 && out[ib].Duration > 0 {
+					diff := out[ia].Duration - out[ib].Duration
+					if diff < 0 {
+						diff = -diff
+					}
+					if diff > 8 {
+						continue
+					}
+				}
+				out[ia].Duplicate = true
+				out[ib].Duplicate = true
+			}
+		}
+	}
+	return out
+}
+
+func (e *Engine) libraryRecords() ([]LibraryTrack, map[string]bool, string) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	contexts := map[string]struct{ sources, creators []string }{}
 	pathSources := map[string]map[string]string{}
 	for _, source := range e.m.Sources {
@@ -75,31 +130,76 @@ func (e *Engine) Library() []LibraryTrack {
 		}
 		out = append(out, row)
 	}
-	root := e.m.Root
-	e.mu.Unlock()
-	// Stat outside the lock: on USB or MTP it is slow and would stall downloads and rendering.
-	kept := out[:0]
-	for _, row := range out {
-		// A crash after saving the tombstone may leave the file behind.
-		// Keep that file visible so the user can retry the deletion.
-		if removed[row.ID] {
-			if _, err := os.Lstat(filepath.Join(root, row.Path)); os.IsNotExist(err) {
-				continue
-			}
+	return out, removed, e.m.Root
+}
+
+func libraryTrackOnDisk(root string, row LibraryTrack, removed bool) (LibraryTrack, bool) {
+	path := filepath.Join(root, row.Path)
+	if removed {
+		// A crash after saving the tombstone may leave a file to delete.
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			return row, false
 		}
-		if info, err := os.Stat(filepath.Join(root, row.Path)); err == nil {
-			row.Size, row.Modified = info.Size(), info.ModTime().UnixNano()
-			if !info.Mode().IsRegular() || info.Size() == 0 {
-				row.Invalid, row.Status = true, "invalid"
-			}
-		} else if os.IsNotExist(err) {
-			row.Missing, row.Status = true, "missing"
-		} else {
-			row.Status, row.Note = "unreadable", err.Error()
-		}
-		kept = append(kept, row)
 	}
-	out = kept
+	if info, err := os.Stat(path); err == nil {
+		row.Size, row.Modified = info.Size(), info.ModTime().UnixNano()
+		if !info.Mode().IsRegular() || info.Size() == 0 {
+			row.Invalid, row.Status = true, "invalid"
+		}
+	} else if os.IsNotExist(err) {
+		row.Missing, row.Status = true, "missing"
+	} else {
+		row.Status, row.Note = "unreadable", err.Error()
+	}
+	return row, true
+}
+
+// ManifestLibrary returns known tracks from data.music without blocking on os.Stat.
+func (e *Engine) ManifestLibrary() []LibraryTrack {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	type ctxInfo struct{ sources, creators []string }
+	contexts := map[string]ctxInfo{}
+	for _, source := range e.m.Sources {
+		for _, id := range source.Tracks {
+			c := contexts[id]
+			c.sources = append(c.sources, source.Title)
+			if source.Creator != "" {
+				c.creators = append(c.creators, source.Creator)
+			}
+			contexts[id] = c
+		}
+	}
+	var out []LibraryTrack
+	for id, t := range e.m.Tracks {
+		if t.Path == "" || t.Status == manifest.StatusRemoved {
+			continue
+		}
+		row := LibraryTrack{
+			ID:         id,
+			Title:      t.Title,
+			Path:       t.Path,
+			Duration:   t.Duration,
+			Status:     "not scanned",
+			Sources:    strings.Join(contexts[id].sources, " · "),
+			Creators:   strings.Join(contexts[id].creators, " · "),
+			References: len(contexts[id].sources),
+		}
+		row.Orphan = row.References == 0
+		if album, _ := e.m.AlbumOf(id); album != "" {
+			row.Album = album
+		}
+		if e.presence != nil {
+			if present, known := e.presence[t.Path]; known {
+				if present {
+					row.Status = "present"
+				} else {
+					row.Missing, row.Status = true, "missing"
+				}
+			}
+		}
+		out = append(out, row)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := strings.ToLower(out[i].Title), strings.ToLower(out[j].Title)
 		if a != b {
@@ -107,25 +207,18 @@ func (e *Engine) Library() []LibraryTrack {
 		}
 		return out[i].ID < out[j].ID
 	})
-	// Similar titles flag candidates only. Different editions or artists can match;
-	// the UI explicitly asks the user to compare them before deleting anything.
-	groups := map[string][]int{}
-	for i, t := range out {
-		key := strings.Map(func(r rune) rune {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				return unicode.ToLower(r)
-			}
-			return -1
-		}, t.Title)
-		if key != "" {
-			groups[key] = append(groups[key], i)
-		}
-	}
-	for _, group := range groups {
-		if len(group) > 1 {
-			for _, i := range group {
-				out[i].Duplicate = true
-			}
+	return out
+}
+
+// TracksAtPath returns all non-removed manifest tracks referencing the given relative path.
+func (e *Engine) TracksAtPath(rel string) []LibraryTrack {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	want := filepath.Clean(rel)
+	var out []LibraryTrack
+	for id, t := range e.m.Tracks {
+		if t.Path != "" && t.Status != manifest.StatusRemoved && filepath.Clean(t.Path) == want {
+			out = append(out, LibraryTrack{ID: id, Title: t.Title, Path: t.Path, Duration: t.Duration})
 		}
 	}
 	return out

@@ -166,7 +166,7 @@ func TestArtistMarksInstalledAndFindsDownloadedArtists(t *testing.T) {
 	if m.screen != screenArtist || len(m.artist.saved) != 1 || m.artist.saved[0] != "Daft Punk" {
 		t.Fatalf("expected saved artists picker with Daft Punk, got screen=%v saved=%v", m.screen, m.artist.saved)
 	}
-	m = press(m, "esc")
+	m = press(m, "3")
 
 	// Shift+F on Sources jumps straight to searching the source's creator
 	m = press(m, "F")

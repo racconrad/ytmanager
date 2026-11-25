@@ -20,6 +20,8 @@ type libraryState struct {
 	confirm                             []string
 	scanning                            bool
 	cancel                              context.CancelFunc
+	scan                                *libraryScan
+	preview                             []engine.LibraryTrack
 	complete, albums, orphans, problems bool
 	inventoryKnown                      bool
 	scanNotice                          string
@@ -34,12 +36,34 @@ type libraryState struct {
 	settingsAction                      string
 	helpCursor                          int
 	catalogCursor                       int
-	sourceTracks                        map[string]bool
-	removeSource                        *engine.SourceView
-	details                             *engine.LibraryTrack
+	sourceTracks   map[string]bool
+	removeSource   *engine.SourceView
+	details        *engine.LibraryTrack
+	allGen         int
+	cachedKey      libraryCacheKey
+	cachedValid    bool
+	cachedRows     []engine.LibraryTrack
+	cachedItems    []libraryItem
+}
+
+type libraryCacheKey struct {
+	allLen       int
+	firstID      string
+	lastID       string
+	allGen       int
+	query        string
+	duplicates   bool
+	orphans      bool
+	problems     bool
+	albums       bool
+	album        string
+	complete     bool
+	invKnown     bool
+	sourceSetLen int
+	hasSourceSet bool
 }
 type libraryScannedMsg struct {
-	eng    *engine.Engine
+	scan   *libraryScan
 	tracks []engine.LibraryTrack
 	err    error
 }
@@ -85,12 +109,58 @@ func (m *model) resumeLibrary() tea.Cmd {
 	}
 	return m.scanLibrary()
 }
-func (m model) libraryRows() []engine.LibraryTrack {
+func (m model) currentLibraryCacheKey() libraryCacheKey {
 	query := m.library.query
 	if m.library.search {
 		query = m.input.Value()
 	}
-	all := engine.FilterLibrary(m.library.all, query, m.library.duplicates)
+	firstID, lastID := "", ""
+	if n := len(m.library.all); n > 0 {
+		firstID, lastID = m.library.all[0].ID, m.library.all[n-1].ID
+	}
+	return libraryCacheKey{
+		allLen:       len(m.library.all),
+		firstID:      firstID,
+		lastID:       lastID,
+		allGen:       m.library.allGen,
+		query:        query,
+		duplicates:   m.library.duplicates,
+		orphans:      m.library.orphans,
+		problems:     m.library.problems,
+		albums:       m.library.albums,
+		album:        m.library.album,
+		complete:     m.library.complete,
+		invKnown:     m.library.inventoryKnown,
+		sourceSetLen: len(m.library.sourceTracks),
+		hasSourceSet: m.library.sourceTracks != nil,
+	}
+}
+
+func (m *model) ensureLibraryCache() ([]engine.LibraryTrack, []libraryItem) {
+	key := m.currentLibraryCacheKey()
+	if m.library.cachedValid && m.library.cachedKey == key {
+		return m.library.cachedRows, m.library.cachedItems
+	}
+	rows := m.computeLibraryRows()
+	items := m.libraryItemsFrom(rows)
+	m.library.cachedKey, m.library.cachedValid = key, true
+	m.library.cachedRows, m.library.cachedItems = rows, items
+	return rows, items
+}
+
+func (m model) libraryRows() []engine.LibraryTrack {
+	if m.library.cachedValid && m.library.cachedKey == m.currentLibraryCacheKey() {
+		return m.library.cachedRows
+	}
+	return m.computeLibraryRows()
+}
+
+func (m model) computeLibraryRows() []engine.LibraryTrack {
+	query := m.library.query
+	if m.library.search {
+		query = m.input.Value()
+	}
+	all := engine.FilterLibrary(m.libraryDisplayRows(), query, m.library.duplicates)
 	var rows []engine.LibraryTrack
 	for _, r := range all {
 		if m.library.sourceTracks != nil && !m.library.sourceTracks[r.ID] && !m.library.sourceTracks[r.SourceID] {
@@ -115,7 +185,10 @@ func (m model) libraryRows() []engine.LibraryTrack {
 	return rows
 }
 func (m model) libraryItems() []libraryItem {
-	return m.libraryItemsFrom(m.libraryRows())
+	if m.library.cachedValid && m.library.cachedKey == m.currentLibraryCacheKey() {
+		return m.library.cachedItems
+	}
+	return m.libraryItemsFrom(m.computeLibraryRows())
 }
 
 func (m model) libraryItemsFrom(rows []engine.LibraryTrack) []libraryItem {
@@ -165,13 +238,23 @@ func (m *model) reviewDeletion() {
 	// every affected entry, so future syncs cannot recreate a deleted alias.
 	paths, ids := map[string]bool{}, map[string]bool{}
 	for _, r := range m.library.candidates {
-		paths[r.Path] = true
+		paths[filepath.Clean(r.Path)] = true
 		ids[r.ID] = true
 	}
 	for _, r := range m.library.all {
-		if paths[r.Path] && !ids[r.ID] {
+		if paths[filepath.Clean(r.Path)] && !ids[r.ID] {
 			m.library.candidates = append(m.library.candidates, r)
 			ids[r.ID] = true
+		}
+	}
+	if m.eng != nil {
+		for p := range paths {
+			for _, alias := range m.eng.TracksAtPath(p) {
+				if !ids[alias.ID] {
+					m.library.candidates = append(m.library.candidates, alias)
+					ids[alias.ID] = true
+				}
+			}
 		}
 	}
 	m.library.confirm = nil
@@ -187,6 +270,7 @@ func (m *model) libraryOperation(action string) tea.Cmd {
 	eng := m.eng
 	ctx, cancel := context.WithCancel(context.Background())
 	m.library.cancel, m.library.busy, m.library.since = cancel, true, time.Now()
+	existing := append([]engine.LibraryTrack(nil), m.library.all...)
 	selected := append([]engine.LibraryTrack(nil), m.library.candidates...)
 	ids := map[string]bool{}
 	for _, id := range m.library.confirm {
@@ -226,7 +310,29 @@ func (m *model) libraryOperation(action string) tea.Cmd {
 				report, err = eng.ApplyLibraryPlan(ctx, *plan)
 			}
 		}
-		// Always keep a physical inventory after a mutation, including partial failures.
+		// Fast incremental inventory update on clean trash/reset: avoids freezing on a full
+		// MTP/USB device re-walk after deleting a file. Full refresh runs on restore/apply/errors.
+		if (action == "trash" || action == "reset") && err == nil && report.Failed == 0 && len(existing) > 0 {
+			removedPaths := map[string]bool{}
+			for _, it := range report.Items {
+				removedPaths[strings.ToLower(filepath.Clean(it.Path))] = true
+			}
+			for _, r := range chosen {
+				if r.Path != "" {
+					removedPaths[strings.ToLower(filepath.Clean(r.Path))] = true
+				}
+			}
+			kept := make([]engine.LibraryTrack, 0, len(existing))
+			for _, row := range existing {
+				if row.Path != "" && removedPaths[strings.ToLower(filepath.Clean(row.Path))] {
+					continue
+				}
+				kept = append(kept, row)
+			}
+			eng.SetPresenceFromScan(kept)
+			return libraryDeletedMsg{eng, kept, report, nil, nil}
+		}
+		// Always keep a physical inventory after restore, organize, or partial failures.
 		rows, scanErr := eng.RefreshLibrary(ctx)
 		return libraryDeletedMsg{eng, rows, report, err, scanErr}
 	}
@@ -440,7 +546,7 @@ func (m model) libraryKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.paste(string(k.Runes))
 		return m, cmd
 	}
-	items := m.libraryItems()
+	_, items := m.ensureLibraryCache()
 	switch key {
 	case "q":
 		return m, tea.Quit

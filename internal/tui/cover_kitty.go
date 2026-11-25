@@ -35,6 +35,8 @@ type coverOverlay struct {
 	transmittedKey string
 	placed         bool
 	lastPos        [4]int
+	encoded        map[string]string
+	encodedOrder   []string
 }
 
 func newCoverOverlay(out *os.File) *coverOverlay {
@@ -114,9 +116,17 @@ func (o *coverOverlay) Write(p []byte) (int, error) {
 			pre.WriteString(kittyDeleteAllSeq())
 		}
 		if want.key != transmitted {
-			pngBytes, pngErr := encodeSquarePNG(want.img)
-			if pngErr == nil {
-				post.WriteString(encodeKittyTransmit(kittyImageID, pngBytes))
+			seq, ok := o.cachedTransmit(want.key)
+			if !ok {
+				pngBytes, pngErr := encodeSquarePNG(want.img)
+				if pngErr == nil {
+					seq = encodeKittyTransmit(kittyImageID, pngBytes)
+					o.storeTransmit(want.key, seq)
+					ok = true
+				}
+			}
+			if ok {
+				post.WriteString(seq)
 				o.mu.Lock()
 				o.transmittedKey = want.key
 				o.mu.Unlock()
@@ -140,6 +150,33 @@ func (o *coverOverlay) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+func (o *coverOverlay) cachedTransmit(key string) (string, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.encoded == nil {
+		return "", false
+	}
+	seq, ok := o.encoded[key]
+	return seq, ok
+}
+
+func (o *coverOverlay) storeTransmit(key, seq string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.encoded == nil {
+		o.encoded = map[string]string{}
+	}
+	if _, exists := o.encoded[key]; !exists {
+		if len(o.encodedOrder) >= 16 {
+			oldest := o.encodedOrder[0]
+			o.encodedOrder = o.encodedOrder[1:]
+			delete(o.encoded, oldest)
+		}
+		o.encodedOrder = append(o.encodedOrder, key)
+	}
+	o.encoded[key] = seq
 }
 
 func (o *coverOverlay) close() {

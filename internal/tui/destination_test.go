@@ -15,15 +15,19 @@ func TestDestinationBrowserCanCancelOrChooseSubfolder(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "Subfolder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m.cursor, m.marked["A025"] = 25, true
+	m = press(m, "3")
+	for range 25 {
+		m = press(m, "down")
+	}
+	m.marked["A025"] = true
 	m.log("keep this log")
-	m = press(m, "esc")
+	m = press(m, "1", "c")
 	if m.screen != screenBrowse || m.eng != engine || m.browse != root {
-		t.Fatal("Esc did not open the current destination in the browser")
+		t.Fatal("c did not open the current destination in the browser")
 	}
 	m = press(m, "esc")
-	if m.screen != screenSources || m.cursor != 25 || !m.marked["A025"] || len(m.logs) != 1 {
-		t.Fatal("cancelling lost the library selection or history")
+	if m.screen != screenLibrary || !m.marked["A025"] || len(m.logs) != 1 {
+		t.Fatal("cancelling lost the selection or history")
 	}
 	m = press(m, "c", "down", "down", "right", "u")
 	if m.screen != screenLibrary || !m.library.scanning || m.eng.Root() != filepath.Join(root, "Subfolder") {
@@ -39,8 +43,8 @@ func TestDestinationChangeWaitsForCurrentOperation(t *testing.T) {
 	m := scrollModel(t)
 	root := m.eng.Root()
 	m.run.busy = true
-	m = press(m, "esc")
-	if m.screen != screenSources || m.eng.Root() != root || !strings.Contains(m.logs[len(m.logs)-1], "cancel it with x") {
+	m = press(m, "c")
+	if m.screen == screenBrowse || m.eng.Root() != root || len(m.logs) == 0 || !strings.Contains(m.logs[len(m.logs)-1], "cancel it with x") {
 		t.Fatal("destination changed during an operation")
 	}
 }

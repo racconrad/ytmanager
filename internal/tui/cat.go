@@ -31,8 +31,23 @@ type cat struct {
 
 type catTickMsg struct{}
 
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (m model) spinnerFrame() string {
+	return spinnerFrames[m.cat.frame%len(spinnerFrames)]
+}
+
+func (m model) isAnimating() bool {
+	return m.startup || m.opening != "" || m.run.busy || m.run.readingURL != "" || m.library.scanning || m.library.busy ||
+		m.artist.searching || m.artist.loading || m.artist.inspecting
+}
+
 func catTick() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return catTickMsg{} })
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return catTickMsg{} })
+}
+
+func idleTick() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return catTickMsg{} })
 }
 
 // celebrate shows a happy (or sad, if something failed) face for a few seconds.
@@ -42,6 +57,10 @@ func (c *cat) celebrate(sad bool, now time.Time) {
 
 // catView draws the cat and, during a sync, the track it walks along.
 func (m model) catView(w int) string {
+	return m.renderCat(w, true)
+}
+
+func (m model) renderCat(w int, caption bool) string {
 	f := m.cat.frame
 	face, feet, say := "open", "sit", "Paste a link and I will fetch it."
 	if f%20 == 0 {
@@ -50,7 +69,7 @@ func (m model) catView(w int) string {
 	x, track := 0, ""
 
 	if m.run.busy && m.run.total > 0 { // walk along the track; while paused the cat sleeps where it stopped
-		trackW := min(w-4, 60)
+		trackW := max(catWidth, min(w-6, 60))
 		p := m.run.progress()
 		x = int(p * float64(trackW-catWidth))
 		filled := min(trackW, x+catWidth/2)
@@ -83,9 +102,13 @@ func (m model) catView(w int) string {
 	}
 
 	pad := strings.Repeat(" ", x)
+	faceLine := pad + catStyle.Render(catFaces[face])
+	if caption {
+		faceLine += "  " + dim.Render(say)
+	}
 	lines := []string{
 		pad + catStyle.Render(catHead),
-		pad + catStyle.Render(catFaces[face]) + "  " + dim.Render(say),
+		faceLine,
 		pad + catStyle.Render(catFeet[feet]),
 	}
 	if track != "" {

@@ -18,6 +18,7 @@ type collectionState struct {
 	preview      *ytdlp.Listing
 	previewURL   string
 	returnTo     screen
+	filesMode    bool
 }
 
 func (m model) activeCollection() engine.Collection {
@@ -106,6 +107,27 @@ func (m model) collectionKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		state := m.collection
 		return m, func() tea.Msg { return coverOpenedMsg{state, openCover(c.Cover)} }
+	case "f":
+		if m.collection.preview == nil {
+			m.collection.filesMode = !m.collection.filesMode
+		}
+	case "r":
+		if m.collection.preview == nil && !m.run.busy && c.URL != "" {
+			n, err := m.eng.RetrySource(m.collection.id)
+			if err != nil {
+				m.fail(err)
+				break
+			}
+			if n == 0 {
+				m.log("No failed or missing tracks to retry in this source.")
+				break
+			}
+			return m, m.download([]string{c.URL})
+		}
+	case "R":
+		if m.collection.preview == nil && !m.run.busy {
+			return m, m.start(nil, "repaired", m.eng.Repair)
+		}
 	case "ctrl+home":
 		m.scrollLogs(len(m.logLines()))
 	case "ctrl+end":
@@ -124,7 +146,11 @@ func (m model) collectionKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) collectionPageSize() int {
-	return max(1, m.terminalHeight()-m.footerHeight(m.help())-7)
+	page := max(1, m.terminalHeight()-m.footerHeight(m.help())-7)
+	if m.collection.filesMode {
+		return max(1, page/2)
+	}
+	return page
 }
 
 func trackStatus(status string) string {

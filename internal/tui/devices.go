@@ -15,16 +15,18 @@ import (
 
 func (m model) devicesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	mounts := m.pickerMounts()
 	switch k.String() {
 	case "esc":
 		m.returnToDestination()
 	case "up", "k":
 		m.cursor = max(0, m.cursor-1)
 	case "down", "j":
-		m.cursor = min(len(m.mounts), m.cursor+1)
+		m.cursor = min(len(mounts), m.cursor+1)
 	case "r":
-		m.mounts = device.List()
-		m.cursor = min(m.cursor, len(m.mounts))
+		list, roots := device.List()
+		m.mountRoots = roots
+		m.replaceMounts(list, availableRecent(m.history, list, roots))
 	case "x":
 		if m.lost != nil {
 			m.log(dim.Render("Stopped waiting for " + device.Label(m.lost.path) + "."))
@@ -32,15 +34,17 @@ func (m model) devicesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "e", "tab": // edit the device path before opening it (e.g. append /Personal)
 		v := ""
-		if m.cursor < len(m.mounts) {
-			v = m.mounts[m.cursor].Path
+		if m.cursor < len(mounts) {
+			v = mounts[m.cursor].Path
 		}
 		cmd = m.ask(promptPath, "/path/to/destination", v)
 	case "enter", "right", "l":
-		if m.cursor == len(m.mounts) {
+		if m.cursor >= len(mounts) {
 			cmd = m.ask(promptPath, "/path/to/destination", "")
+		} else if m.cursor < len(m.recent) && k.String() == "enter" {
+			cmd = m.openRecent(mounts[m.cursor].Path)
 		} else {
-			m.openBrowser(m.mounts[m.cursor].Path)
+			m.openBrowser(mounts[m.cursor].Path)
 		}
 	}
 	return m, cmd

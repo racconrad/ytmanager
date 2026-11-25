@@ -23,7 +23,11 @@ const trashDir = ".ytmanager-trash"
 // ScanLibrary reconciles physical files with records without modifying either.
 // Missing records remain visible. Trash is never part of the active library.
 func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
-	managed := e.Library()
+	return e.scanLibrary(ctx, nil)
+}
+
+func (e *Engine) scanLibrary(ctx context.Context, discover func([]LibraryTrack)) ([]LibraryTrack, error) {
+	managed, removed, root := e.libraryRecords()
 	byPath := map[string][]LibraryTrack{}
 	bySource := map[string][]LibraryTrack{}
 	for _, t := range managed {
@@ -46,58 +50,13 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 	}
 	e.mu.Unlock()
 	var rows []LibraryTrack
-	var files []scanFile
-	var playlists []string
 	seen := map[string]bool{}
-	var failures []error
-	root := e.Root()
 	e.scanDone.Store(0)
 	e.scanTotal.Store(0)
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if err != nil {
-			failures = append(failures, err)
-			return nil
-		}
-		if d.IsDir() {
-			if strings.EqualFold(d.Name(), trashDir) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(p))
-		if ext == ".m3u" || ext == ".m3u8" {
-			playlists = append(playlists, p)
-			return nil
-		}
-		if !audioExtension(p) {
-			return nil
-		}
-		rel, _ := filepath.Rel(root, p)
-		stat, err := d.Info()
-		if err != nil {
-			failures = append(failures, err)
-			return nil
-		}
-		if !stat.Mode().IsRegular() {
-			return nil
-		}
-		entries := byPath[rel]
-		if folded := byFold[strings.ToLower(rel)]; len(entries) == 0 && len(folded) == 1 {
-			entries = byPath[folded[0]]
-		}
-		if len(entries) == 0 {
-			entries = []LibraryTrack{{ID: "file:" + rel, Title: strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())), Unmanaged: true}}
-		}
-		files = append(files, scanFile{p, rel, stat, entries})
-		e.scanTotal.Add(1)
-		return nil
-	})
+	files, playlists, failures := e.discoverFiles(ctx, root, byPath, byFold, discover)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Probing and hashing dominate on USB and MTP; a few workers keep the scan responsive.
 	var mu sync.Mutex
 	work := make(chan scanFile)
@@ -122,32 +81,32 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 		if ctx.Err() != nil {
 			break
 		}
-		work <- f
+		select {
+		case work <- f:
+		case <-ctx.Done():
+		}
 	}
 	close(work)
 	wg.Wait()
-	if err == nil && ctx.Err() != nil {
-		err = ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if err != nil {
-		failures = append(failures, err)
-	} else {
-		walked := map[string]bool{}
-		for _, f := range files {
-			walked[f.rel] = true
-		}
-		e.probes.prune(walked)
-	}
-	_ = e.probes.save() // the cache only speeds up the next scan; losing it is harmless
 	for _, row := range managed {
-		if !seen[row.ID] {
-			row.Duplicate = false
-			if !row.Missing {
-				row.Status = "not scanned"
-				row.Note = "File was not included in this scan; rescan before changing it"
-			}
-			rows = append(rows, row)
+		if seen[row.ID] {
+			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		row, keep := libraryTrackOnDisk(root, row, removed[row.ID])
+		if !keep {
+			continue
+		}
+		if !row.Missing {
+			row.Status = "not scanned"
+			row.Note = "File was not included in this scan; rescan before changing it"
+		}
+		rows = append(rows, row)
 	}
 	// Local playlists also protect external music. An incomplete scan must never
 	// classify files as safe cleanup candidates.
@@ -165,6 +124,9 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 4096), 1024*1024)
 		for sc.Scan() {
+			if ctx.Err() != nil {
+				break
+			}
 			line := strings.TrimSpace(strings.TrimPrefix(sc.Text(), "\ufeff"))
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
@@ -193,8 +155,8 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 		}
 		f.Close()
 	}
-	if ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
-		failures = append(failures, ctx.Err())
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	for i := range rows {
 		path := rows[i].Path
@@ -210,25 +172,36 @@ func (e *Engine) ScanLibrary(ctx context.Context) ([]LibraryTrack, error) {
 		}
 	}
 	markDuplicates(rows)
-	e.mu.Lock()
-	e.presence = map[string]bool{}
-	for _, row := range rows {
-		e.presence[row.Path] = !row.Missing && row.Size > 0
-	}
-	e.mu.Unlock()
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Title != rows[j].Title {
 			return strings.ToLower(rows[i].Title) < strings.ToLower(rows[j].Title)
 		}
 		return rows[i].ID < rows[j].ID
 	})
-	return rows, errors.Join(failures...)
-}
-
-type scanFile struct {
-	path, rel string
-	stat      os.FileInfo
-	entries   []LibraryTrack
+	if err := errors.Join(failures...); err != nil {
+		return rows, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	walked := make(map[string]bool, len(files))
+	for _, f := range files {
+		walked[f.rel] = true
+	}
+	e.probes.prune(walked)
+	_ = e.probes.save() // the cache only speeds up the next scan; losing it is harmless
+	presence := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		presence[row.Path] = !row.Missing && row.Size > 0
+	}
+	e.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		e.mu.Unlock()
+		return nil, err
+	}
+	e.presence = presence
+	e.mu.Unlock()
+	return rows, nil
 }
 
 // ScanProgress reports files probed and files found by the current or last scan.
@@ -320,8 +293,13 @@ func markDuplicates(rows []LibraryTrack) {
 		if row.Missing {
 			continue
 		}
-		if row.Hash != "" {
+		if row.Hash != "" && row.Size > 0 {
 			hashes[row.Hash] = append(hashes[row.Hash], i)
+		}
+		// Skip unreadable/corrupt files from title-only duplicate matching: they are already
+		// reported as corrupt and often represent incomplete downloads, not true duplicates.
+		if row.Invalid || row.Status == "unreadable" {
+			continue
 		}
 		key := normalizeTitle(row.Artist) + "/" + normalizeTitle(row.Title)
 		if normalizeTitle(row.Title) != "" {
@@ -332,7 +310,17 @@ func markDuplicates(rows []LibraryTrack) {
 		if !hasDistinctPaths(rows, group) {
 			continue
 		}
-		for _, i := range group {
+		matched := map[int]bool{}
+		for a := 0; a < len(group); a++ {
+			for b := a + 1; b < len(group); b++ {
+				ia, ib := group[a], group[b]
+				if isLikelyDuplicatePair(rows[ia], rows[ib]) {
+					matched[ia] = true
+					matched[ib] = true
+				}
+			}
+		}
+		for i := range matched {
 			rows[i].Duplicate = true
 			rows[i].DuplicateGroup = key
 			rows[i].Note += " · Same artist/title; compare editions"
@@ -348,6 +336,39 @@ func markDuplicates(rows []LibraryTrack) {
 			rows[i].Note += " · Identical file bytes (SHA-256)"
 		}
 	}
+}
+
+func isLikelyDuplicatePair(a, b LibraryTrack) bool {
+	if strings.EqualFold(filepath.Clean(a.Path), filepath.Clean(b.Path)) {
+		return false
+	}
+	// Different durations (>8s) indicate an incomplete cut, snippet, or distinct edition.
+	if a.Duration > 0 && b.Duration > 0 {
+		diff := a.Duration - b.Duration
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > 8 {
+			return false
+		}
+	}
+	// Distinct known YouTube/source IDs on different albums (or >4s apart) are different tracks/editions.
+	if a.SourceID != "" && b.SourceID != "" && a.SourceID != b.SourceID {
+		albA, albB := normalizeTitle(a.Album), normalizeTitle(b.Album)
+		if albA != "" && albB != "" && albA != albB {
+			return false
+		}
+		if a.Duration > 0 && b.Duration > 0 {
+			diff := a.Duration - b.Duration
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > 4 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func hasDistinctPaths(rows []LibraryTrack, indices []int) bool {

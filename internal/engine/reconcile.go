@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"ytmanager/internal/manifest"
 )
@@ -10,15 +11,25 @@ import (
 // RefreshLibrary reconciles missing/invalid managed files after a complete scan.
 // Tool or permission errors never cause music to be scheduled for replacement.
 func (e *Engine) RefreshLibrary(ctx context.Context) ([]LibraryTrack, error) {
-	rows, err := e.ScanLibrary(ctx)
+	return e.RefreshLibraryProgress(ctx, nil)
+}
+
+// RefreshLibraryProgress publishes discovered files before probing them. Only its final
+// result can be used for mutations or to infer a file is missing.
+func (e *Engine) RefreshLibraryProgress(ctx context.Context, discover func([]LibraryTrack)) ([]LibraryTrack, error) {
+	rows, err := e.scanLibrary(ctx, discover)
 	if err != nil {
 		return rows, err
 	}
-	return rows, e.reconcileRows(rows)
+	return rows, e.reconcileRows(ctx, rows)
 }
-func (e *Engine) reconcileRows(rows []LibraryTrack) error {
+
+func (e *Engine) reconcileRows(ctx context.Context, rows []LibraryTrack) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if e.running {
 		return nil
 	}
@@ -62,6 +73,9 @@ func (e *Engine) CleanOrphans(ctx context.Context, selected []LibraryTrack) (Fil
 		actual, ok := byID[r.ID]
 		if !ok || !actual.Orphan || actual.Missing || actual.Path != r.Path {
 			return report, fmt.Errorf("playlist membership changed; review cleanup again: %s", r.Path)
+		}
+		if strings.Contains(actual.Note, "run repair to relink") {
+			return report, fmt.Errorf("run repair to relink this moved file before bulk cleanup: %s", r.Path)
 		}
 	}
 	return e.TrashFiles(ctx, selected)

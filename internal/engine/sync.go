@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"ytmanager/internal/ytdlp"
 )
 
 // Sync refreshes source listings, after resuming already-known pending tracks.
@@ -44,6 +46,13 @@ func (e *Engine) runDownloads(ctx context.Context, urls []string, refresh bool, 
 		for _, title := range skipped {
 			emit(Event{Kind: EvLog, Msg: "Already downloaded: " + title + "; skipped (use sync to refresh)."})
 		}
+	}
+	removed, cleanupErr := ytdlp.CleanupAbandonedStages(ctx, e.Root())
+	if removed > 0 {
+		emit(Event{Kind: EvLog, Msg: fmt.Sprintf("Abandoned download folders removed: %d", removed)})
+	}
+	if cleanupErr != nil && ctx.Err() == nil {
+		emit(Event{Kind: EvLog, Msg: fmt.Sprintf("Could not clean temporary downloads: %v", cleanupErr), Err: cleanupErr})
 	}
 	syncErr := e.schedule(ctx, emit)
 

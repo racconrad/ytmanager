@@ -11,7 +11,14 @@ import (
 const logLimit = 500
 
 func (m model) wrapLog(s string) []string {
-	return strings.Split(ansi.Wrap(s, max(1, m.terminalWidth()-6), ""), "\n")
+	width := m.terminalWidth()
+	margin := 6
+	if m.workspaceVisible() && m.wideActivityFooter() {
+		_, width = m.activityColumns()
+	} else if m.workspaceVisible() {
+		margin = ansi.StringWidth("Logs › ")
+	}
+	return strings.Split(ansi.Wrap(s, max(1, width-margin), ""), "\n")
 }
 
 func (m model) logLines() []string {
@@ -53,6 +60,18 @@ func (m model) logsView() string {
 	return strings.Join(rows, "\n")
 }
 
+func (m model) compactLog() string {
+	if len(m.logs) == 0 {
+		return dim.Render("Logs")
+	}
+	lines := m.wrapLog(m.logs[len(m.logs)-1])
+	if m.logScroll > 0 {
+		lines = m.logLines()
+	}
+	line := lines[max(0, len(lines)-1-m.logScroll)]
+	return dim.Render("Logs › " + line)
+}
+
 func (m model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.prompt != promptNone {
 		return m, nil
@@ -67,7 +86,15 @@ func (m model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	logTop := m.terminalHeight() - m.footerHeight(m.help())
-	if len(m.logs) > 0 && msg.Y >= logTop && msg.Y < logTop+m.logHeight()+1 {
+	logX, logRows := 0, m.logHeight()+1
+	if m.workspaceVisible() {
+		logRows = 1
+		if m.wideActivityFooter() {
+			cat, _ := m.activityColumns()
+			logX, logRows = cat+2, m.activityFooterHeight()
+		}
+	}
+	if len(m.logs) > 0 && msg.X >= logX && msg.Y >= logTop && msg.Y < logTop+logRows {
 		m.scrollLogs(direction * 3)
 		return m, nil
 	}

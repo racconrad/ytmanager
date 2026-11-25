@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"ytmanager/internal/device"
@@ -14,7 +15,19 @@ import (
 )
 
 func (m model) devicesView(b *strings.Builder, w int) {
-	b.WriteString(hi.Render("Choose a device") + dim.Render(" · 1 of 2") + "\n")
+	wide := m.terminalWidth() >= 76 && m.terminalHeight()-m.footerHeight(m.help()) >= 14 && m.lost == nil
+	if m.terminalHeight() >= 18 && m.lost == nil {
+		brand := logo.Render("ytmanager")
+		if !wide {
+			brand += "  " + ok.Render("=^.^= [o-o]")
+		}
+		b.WriteString(brand + "\n")
+	}
+	if len(m.recent) > 0 {
+		b.WriteString(hi.Render("Choose a destination") + "\n")
+	} else {
+		b.WriteString(hi.Render("Choose a device") + dim.Render(" · 1 of 2") + "\n")
+	}
 	if m.lost != nil {
 		prefix := "Waiting for "
 		b.WriteString(bad.Render(prefix+destinationLabel(m.lost.path, m.terminalWidth()-len(prefix))) + "\n")
@@ -24,9 +37,19 @@ func (m model) devicesView(b *strings.Builder, w int) {
 	}
 	var rows []string
 	home, _ := os.UserHomeDir()
-	for i, mount := range m.mounts {
+	mounts := m.pickerMounts()
+	listWidth := w
+	if wide {
+		listWidth -= 30
+	}
+	for i, mount := range mounts {
 		kind := "Drive"
-		if device.IsMTP(mount.Path) {
+		if i < len(m.recent) {
+			kind = "Recent folder"
+			if listWidth < 32 {
+				kind = "Recent"
+			}
+		} else if device.IsMTP(mount.Path) {
 			kind = "MTP"
 		} else if home != "" && mount.Path == filepath.Join(home, "Music") {
 			kind = "Local"
@@ -35,10 +58,29 @@ func (m model) devicesView(b *strings.Builder, w int) {
 		if mount.Free > 0 {
 			capacity = engine.Human(mount.Free) + " free"
 		}
-		rows = append(rows, pick(i == m.cursor, destinationLabel(mount.Path, w-6)), dim.Render(" "+kind+" · "+capacity))
+		label := destinationLabel(mount.Path, listWidth-6)
+		if i == m.cursor {
+			label = hi.Render(label)
+		}
+		rows = append(rows, pick(i == m.cursor, label), dim.Render(" "+kind+" · "+capacity))
 	}
-	rows = append(rows, pick(m.cursor == len(m.mounts), "Other path…"), dim.Render("  Type or paste a path"))
-	m.listPanel(b, w, rows, m.cursor*2, 2, 0)
+	rows = append(rows, pick(m.cursor == len(mounts), "Other path…"), dim.Render("  Type or paste a path"))
+	if wide {
+		var list strings.Builder
+		m.listPanel(&list, listWidth, rows, m.cursor*2, 2, strings.Count(b.String(), "\n"))
+		action := "Choose a folder"
+		switch {
+		case m.prompt != promptNone:
+			action = "Confirm path"
+		case m.cursor >= len(mounts):
+			action = "Type or paste a path"
+		case m.cursor < len(m.recent):
+			action = "Open saved folder"
+		}
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, strings.TrimSuffix(list.String(), "\n"), "    ", pickerCassette(action)) + "\n")
+	} else {
+		m.listPanel(b, listWidth, rows, m.cursor*2, 2, 0)
+	}
 	m.footer(b, m.help())
 }
 

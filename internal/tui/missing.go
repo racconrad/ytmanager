@@ -89,6 +89,8 @@ func (m model) missingView(b *strings.Builder, w int) {
 	reason := strings.Join(strings.Fields(x.Error), " ")
 	if x.Alt != "" {
 		detail = append(detail, bad.Render("Alternative unavailable"))
+	} else if x.Failed {
+		detail = append(detail, bad.Render("Download failed"))
 	}
 	if reason == "" && x.Alt == "" {
 		reason = "Original unavailable at source."

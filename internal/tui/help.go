@@ -8,22 +8,31 @@ import (
 
 func (m model) help() string {
 	if m.shortcutHelp {
-		return "esc close · ↑↓ scroll"
+		return "esc close · ↑↓ scroll · q quit"
+	}
+	if m.workspaceVisible() {
+		return m.workspaceHelp()
 	}
 	switch m.screen {
 	case screenDevices:
-		help := "enter open · e edit path · ? keys"
+		help := "enter choose folder · e edit path · ? keys · q quit"
+		switch {
+		case m.cursor < len(m.recent):
+			help = "enter open · → browse · e edit path · ? keys"
+		case m.cursor >= len(m.pickerMounts()):
+			help = "enter type path · ? keys · q quit"
+		}
 		if m.lost != nil {
 			help = "x stop waiting · " + help
 		}
 		return help
 	case screenBrowse:
-		return "u use folder · ? keys · esc back · enter open"
+		return "u use folder · ? keys · esc back · enter open · q quit"
 	case screenSettings:
 		if m.cursor >= moveFiles {
-			return "enter run · ? keys · ↑↓ move · esc back"
+			return "enter run · ? keys · ↑↓ move · esc back · q quit"
 		}
-		return "←→ change · ? keys · ↑↓ move · esc back"
+		return "←→ change · ? keys · ↑↓ move · esc back · q quit"
 	case screenLibrary:
 		if m.library.removeSource != nil {
 			return "enter remove source, keep files · esc cancel"
@@ -62,12 +71,15 @@ func (m model) help() string {
 			}
 			return "x cancel scan"
 		}
-		return "g sources · ? keys · d trash · u restore · s scan folder · / search · b albums · O settings"
+		return "g sources · ? keys · d trash · u restore · s scan folder · / search · b albums · O settings · q quit"
 	case screenCollection:
 		if m.collection.preview != nil {
 			return "enter download · ? keys · m save metadata · esc back"
 		}
-		return "m refresh metadata · esc back · ? keys · c cover"
+		if m.collection.filesMode {
+			return "f tracks · r retry errors · R repair · m refresh · esc back"
+		}
+		return "f files/sync · r retry errors · m refresh · esc back · ? keys"
 	case screenArtist:
 		if m.artist.searching || m.artist.loading {
 			return "esc back · ? keys"
@@ -91,11 +103,15 @@ func (m model) help() string {
 		if m.run.busy {
 			return "p pause/resume · x cancel · v tracks · ? keys · a add link"
 		}
-		return "a add link · l library · ? keys · f find artist · v tracks · enter resume · O settings"
+		return "a add link · l library · ? keys · f find artist · v tracks · enter resume · O settings · q quit"
 	}
 }
 
 func (m model) shortcutList() (string, []string) {
+	if m.eng != nil && m.screen != screenDevices && m.screen != screenBrowse {
+		actions := "↑↓ move in list or actions · →/tab focus actions panel · ←/esc back or top menu · 0 details · 4 review problems · [/] switch tabs · enter open item or run action · space mark items · ctrl+a select or clear all matching items · a add link in Sources · - remove from open album/list, keep audio · d delete selected audio permanently and remove from all lists · / filter list · f find artist · s scan/sync · r repair/retry · p pause downloads · x cancel · q/ctrl+c quit"
+		return "Workspace shortcuts", strings.Split(actions, " · ")
+	}
 	var title, actions string
 	switch m.screen {
 	case screenDevices:
@@ -112,7 +128,7 @@ func (m model) shortcutList() (string, []string) {
 		if m.collection.preview != nil {
 			actions += " · m save metadata"
 		} else {
-			actions += " · m refresh metadata"
+			actions += " · f toggle source files and sync status · r retry failed or missing tracks · R repair and consolidate files · m refresh metadata"
 		}
 	case screenArtist:
 		title, actions = "Artist", "↑↓ move · enter open or download · f new search · c open cover in browser · esc back"
@@ -122,12 +138,12 @@ func (m model) shortcutList() (string, []string) {
 	case screenMissing:
 		title, actions = "Unavailable tracks", "↑↓ move · enter set alternative · paste alternative link · r retry · esc back"
 	default:
-		title, actions = "Source", "↑↓ move · space mark source · a add link · l open local library · f find artist · F find selected artist · v view tracks · enter resume downloads · s sync sources and download · d remove source, keep audio · D review source files · r repair library · e export playlists · n unavailable tracks · O settings · c change folder"
+		title, actions = "Source", "↑↓ move · space mark source · a add link · l open local library · f find artist · F find selected artist · v view tracks · S view source files and sync · enter resume downloads · s sync sources and download · d remove source, keep audio · D review source files · r repair library · e export playlists · n unavailable tracks · O settings · c change folder"
 		if m.run.busy {
 			actions = "p pause/resume · x cancel downloads · v view tracks · a add link · f find artist · F find selected artist · n unavailable tracks · O settings"
 		}
 	}
-	actions += " · ctrl+c quit"
+	actions += " · q/ctrl+c quit"
 	if m.screen != screenArtist && m.screen != screenCollection {
 		actions += " · pgup/pgdn scroll log · ctrl+end latest log"
 	}

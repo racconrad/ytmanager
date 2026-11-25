@@ -19,18 +19,18 @@ var (
 )
 
 func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	srcs := m.eng.Snapshot()
 	var cmd tea.Cmd
 	switch k.String() {
 	case "up", "k":
 		m.cursor = max(0, m.cursor-1)
 	case "down", "j":
-		m.cursor = max(0, min(len(srcs)-1, m.cursor+1))
+		m.cursor = max(0, min(m.eng.SourceCount()-1, m.cursor+1))
 	case "home":
 		m.cursor = 0
 	case "end":
-		m.cursor = max(0, len(srcs)-1)
+		m.cursor = max(0, m.eng.SourceCount()-1)
 	case " ":
+		srcs := m.eng.Snapshot()
 		if len(srcs) > 0 {
 			id := srcs[m.cursor].ID
 			m.marked[id] = !m.marked[id]
@@ -40,18 +40,28 @@ func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "f":
 		cmd = m.ask(promptArtist, "Artist name, link, or Enter for downloaded artists", "")
 	case "F":
+		srcs := m.eng.Snapshot()
 		if len(srcs) > 0 && srcs[m.cursor].Creator != "" {
 			cmd = m.openArtistQuery(srcs[m.cursor].Creator)
 		} else {
 			cmd = m.openSavedArtists()
 		}
 	case "v":
+		srcs := m.eng.Snapshot()
 		if len(srcs) > 0 {
 			m.collection = collectionState{id: srcs[m.cursor].ID, sourceCursor: m.cursor, returnTo: screenSources}
 			m.screen, m.cursor = screenCollection, 0
 			cmd = m.requestCover(srcs[m.cursor].Cover)
 		}
+	case "S":
+		srcs := m.eng.Snapshot()
+		if len(srcs) > 0 {
+			m.collection = collectionState{id: srcs[m.cursor].ID, sourceCursor: m.cursor, returnTo: screenSources, filesMode: true}
+			m.screen, m.cursor = screenCollection, 0
+			cmd = m.requestCover(srcs[m.cursor].Cover)
+		}
 	case "enter":
+		srcs := m.eng.Snapshot()
 		if !m.run.busy && (len(srcs) > 0 || m.eng.HasPending()) {
 			cmd = m.download(m.pickedURLs(srcs))
 		}
@@ -64,6 +74,7 @@ func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmd = m.start(nil, "exported", m.eng.ExportM3U)
 		}
 	case "s":
+		srcs := m.eng.Snapshot()
 		if !m.run.busy && len(srcs) > 0 {
 			cmd = m.sync(m.pickedURLs(srcs))
 		}
@@ -79,6 +90,7 @@ func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.log("Wait for the folder scan to stop.")
 			break
 		}
+		srcs := m.eng.Snapshot()
 		if !m.run.busy && len(srcs) > 0 {
 			m.library = libraryState{removeSource: &srcs[m.cursor]}
 			m.screen, m.cursor = screenLibrary, 0
@@ -94,6 +106,7 @@ func (m model) sourcesKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.log("Wait for the folder scan to stop.")
 			break
 		}
+		srcs := m.eng.Snapshot()
 		if !m.run.busy && len(srcs) > 0 {
 			ids := m.eng.SourceTrackIDs(srcs[m.cursor].ID)
 			cmd = m.openLibrary("")
@@ -184,8 +197,9 @@ func (m model) sourceRows(w int) []string {
 				break
 			}
 		}
-		complete := s.Total > 0 && s.Done == s.Total
-		mark := sourceStatus(active, complete, s.Done)
+		complete := s.Total > 0 && s.Done == s.Total && s.Failed == 0 && s.Missing == 0
+		hasErrors := s.Failed > 0 || s.Missing > 0
+		mark := sourceStatus(active, complete, hasErrors, s.Done)
 		if selecting {
 			mark = dim.Render("○")
 			if m.marked[s.ID] {
@@ -201,6 +215,12 @@ func (m model) sourceRows(w int) []string {
 		}
 		if w >= 70 && s.Total > 0 {
 			count = progressBar(s.Done, s.Total, 8, complete) + " " + count
+		}
+		if w >= 50 && s.Failed > 0 {
+			count += bad.Render(fmt.Sprintf(" · %d failed", s.Failed))
+		}
+		if w >= 50 && s.Missing > 0 {
+			count += bad.Render(fmt.Sprintf(" · %d missing", s.Missing))
 		}
 		if w >= 60 && s.Removed > 0 {
 			count += dim.Render(fmt.Sprintf(" · %d removed", s.Removed))
@@ -318,10 +338,12 @@ func (m model) activeAlbums(w int) string {
 }
 
 // sourceStatus marks each source with a glyph that reads without color. ◐ is avoided: common terminal fonts lack it.
-func sourceStatus(active, complete bool, done int) string {
+func sourceStatus(active, complete, hasErrors bool, done int) string {
 	switch {
 	case active:
 		return hi.Render("↓")
+	case hasErrors:
+		return bad.Render("!")
 	case complete:
 		return ok.Render("✓")
 	case done > 0:

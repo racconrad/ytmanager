@@ -13,16 +13,27 @@ import (
 )
 
 type CollectionTrack struct {
-	ID, Title, Status string
-	Duration          float64
+	ID, Title, Status, Path, Error string
+	Duration                       float64
+	Synced                         bool
 }
 
 type Collection struct {
-	Title, Creator, URL, Cover, Year string
-	Tracks                           []CollectionTrack
+	Title, Creator, URL, Cover, Year                  string
+	Synced, Pending, Failed, Missing, Unavailable, Removed int
+	Tracks                                            []CollectionTrack
 }
 
 func (e *Engine) Collection(id string) Collection {
+	return e.collection(id, e.trackPresent)
+}
+
+// CatalogCollection reads saved collection tracks and cached presence without touching audio files.
+func (e *Engine) CatalogCollection(id string) Collection {
+	return e.collection(id, e.catalogTrackPresent)
+}
+
+func (e *Engine) collection(id string, present func(*manifest.Track) bool) Collection {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := e.m.Source(id)
@@ -30,18 +41,61 @@ func (e *Engine) Collection(id string) Collection {
 		return Collection{}
 	}
 	out := Collection{Title: s.Title, Creator: s.Creator, URL: s.URL, Cover: s.Cover, Year: s.Year}
-	for _, id := range s.TrackOrder() {
-		t := e.m.Tracks[id]
+	for _, tid := range s.TrackOrder() {
+		t := e.m.Tracks[tid]
 		if t == nil {
 			continue
 		}
 		status := t.Status
-		if status == manifest.StatusDone && !e.trackPresent(t) {
-			status = "missing"
+		synced := false
+		switch status {
+		case manifest.StatusDone:
+			if present(t) {
+				synced = true
+				out.Synced++
+			} else {
+				status = "missing"
+				out.Missing++
+			}
+		case manifest.StatusPending:
+			out.Pending++
+		case manifest.StatusFailed:
+			out.Failed++
+		case manifest.StatusUnavailable:
+			out.Unavailable++
+		case manifest.StatusRemoved:
+			out.Removed++
 		}
-		out.Tracks = append(out.Tracks, CollectionTrack{id, t.Title, status, t.Duration})
+		out.Tracks = append(out.Tracks, CollectionTrack{
+			ID: tid, Title: t.Title, Status: status, Path: t.Path, Error: t.Error, Duration: t.Duration, Synced: synced,
+		})
 	}
 	return out
+}
+
+// RetrySource resets failed or missing tracks in source id back to pending so the next download retries them.
+func (e *Engine) RetrySource(id string) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := e.m.Source(id)
+	if s == nil {
+		return 0, nil
+	}
+	count := 0
+	for _, tid := range s.Tracks {
+		t := e.m.Tracks[tid]
+		if t == nil {
+			continue
+		}
+		if t.Status == manifest.StatusFailed || (t.Status == manifest.StatusDone && !e.trackPresent(t)) {
+			t.Status, t.Fails = manifest.StatusPending, 0
+			count++
+		}
+	}
+	if count == 0 {
+		return 0, nil
+	}
+	return count, e.m.Save()
 }
 
 // Inspect reads a collection or track listing without writing to the manifest or downloading audio.
@@ -88,7 +142,7 @@ func (e *Engine) InstalledCatalog() (albums map[string]bool, artists []string) {
 		}
 		if s.Type == "album" {
 			for _, tid := range s.Tracks {
-				if t := e.m.Tracks[tid]; t != nil && t.Status == manifest.StatusDone && e.trackPresent(t) {
+				if t := e.m.Tracks[tid]; t != nil && t.Status == manifest.StatusDone && e.catalogTrackPresent(t) {
 					albums[strings.ToLower(strings.TrimSpace(s.Title))] = true
 					break
 				}
@@ -96,7 +150,7 @@ func (e *Engine) InstalledCatalog() (albums map[string]bool, artists []string) {
 		}
 	}
 	for _, t := range e.m.Tracks {
-		if t.Status != manifest.StatusDone || !e.trackPresent(t) {
+		if t.Status != manifest.StatusDone || !e.catalogTrackPresent(t) {
 			continue
 		}
 		parts := strings.Split(filepath.ToSlash(filepath.Clean(t.Path)), "/")

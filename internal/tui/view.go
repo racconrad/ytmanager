@@ -8,14 +8,18 @@ import (
 )
 
 var (
-	accent = lipgloss.AdaptiveColor{Light: "#583d74", Dark: "#d2b5ef"}
-	gray   = lipgloss.AdaptiveColor{Light: "#796b7e", Dark: "#62576b"}
-	logo   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#ffffff", Dark: "#0b0b0f"}).Background(accent).Padding(0, 1)
-	dim    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#615964", Dark: "#bcb2c4"})
-	hi     = lipgloss.NewStyle().Foreground(accent).Bold(true)
-	ok     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#4ade80"})
-	bad    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#991b1b", Dark: "#f87171"})
-	box    = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(gray).Padding(0, 1)
+	accent  = lipgloss.AdaptiveColor{Light: "#6B4E8A", Dark: "#C4A7E7"}
+	gray    = lipgloss.AdaptiveColor{Light: "#C2BACB", Dark: "#4E4859"}
+	surface = lipgloss.AdaptiveColor{Light: "#EAE2F5", Dark: "#2D253B"}
+	logo    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#121017"}).Background(accent).Padding(0, 1)
+	dim     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#655D6E", Dark: "#9E96AA"})
+	hi      = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	tabOn   = lipgloss.NewStyle().Bold(true).Foreground(accent).Background(surface).Padding(0, 1)
+	tabOff  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#655D6E", Dark: "#9E96AA"}).Padding(0, 1)
+	ok      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#7EE787"})
+	warn    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#92400E", Dark: "#F2CC60"})
+	bad     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#991B1B", Dark: "#FF7B72"})
+	box     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(gray).Padding(0, 1)
 )
 
 func (m model) View() string {
@@ -27,7 +31,27 @@ func (m model) View() string {
 		}
 		return fitLines("Enlarge terminal to at least 30x12.", m.terminalWidth(), m.terminalHeight())
 	}
+	if m.startup || m.opening != "" {
+		if m.overlay != nil {
+			m.overlay.setPlacement(nil)
+		}
+		return m.welcomeView()
+	}
 	w := m.terminalWidth() - 4
+	if m.ws.deleteReview != nil {
+		if m.overlay != nil {
+			m.overlay.setPlacement(nil)
+		}
+		m.workspaceDeleteReview(&b)
+		return fitLines(b.String(), m.terminalWidth(), m.terminalHeight())
+	}
+	if m.workspaceVisible() {
+		m.workspaceView(&b)
+		if m.overlay != nil {
+			m.overlay.setPlacement(m.nextCover)
+		}
+		return fitLines(b.String(), m.terminalWidth(), m.terminalHeight())
+	}
 	m.writeNavigation(&b)
 	switch {
 	case m.shortcutHelp:
@@ -55,6 +79,11 @@ func (m model) View() string {
 	return fitLines(b.String(), m.terminalWidth(), m.terminalHeight())
 }
 
+func (m model) workspaceVisible() bool {
+	return m.eng != nil && m.screen != screenDevices && m.screen != screenBrowse && !m.shortcutHelp &&
+		!m.libraryOverlayVisible() && m.ws.deleteReview == nil && !(m.screen == screenCollection && m.collection.preview != nil)
+}
+
 func (m model) writeNavigation(b *strings.Builder) {
 	if m.eng == nil || m.terminalWidth() < 52 || m.terminalHeight() < 18 ||
 		m.shortcutHelp || m.screen == screenDevices || m.screen == screenBrowse || m.libraryOverlayVisible() {
@@ -73,7 +102,7 @@ func (m model) writeNavigation(b *strings.Builder) {
 
 func (m model) libraryOverlayVisible() bool {
 	l := m.library
-	return m.screen == screenLibrary && (l.candidates != nil || l.plan != nil || l.report != nil || l.details != nil ||
+	return m.screen == screenLibrary && (l.candidates != nil || l.confirm != nil || l.plan != nil || l.report != nil || l.details != nil ||
 		l.help || l.removeSource != nil || l.tools || l.purge || l.restore)
 }
 

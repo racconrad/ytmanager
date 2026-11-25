@@ -121,3 +121,17 @@ func TestRenderCoverArtDimensionsAndColors(t *testing.T) {
 		}
 	}
 }
+
+func TestDownsampleCoverAndRenderCache(t *testing.T) {
+	large := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	ds := downsampleCover(large, 192)
+	if ds.Bounds().Dx() != 192 || ds.Bounds().Dy() != 192 {
+		t.Fatalf("downsampled size = %dx%d, want 192x192", ds.Bounds().Dx(), ds.Bounds().Dy())
+	}
+	m := newModel()
+	first := m.renderedCover("k1", ds, 12, 6)
+	second := m.renderedCover("k1", ds, 12, 6)
+	if len(first) != 6 || len(second) != 6 || &first[0] != &second[0] {
+		t.Fatal("expected cached rendered cover slice to be reused")
+	}
+}

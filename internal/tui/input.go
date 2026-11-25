@@ -6,6 +6,19 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
+	if m.startup || m.opening != "" {
+		return m, nil
+	}
+	if !k.Paste && (k.String() == "q" || k.String() == "Q") && m.prompt == promptNone &&
+		!(m.screen == screenLibrary && m.library.search) && !m.ws.searching {
+		if m.run.cancel != nil {
+			m.run.cancel()
+		}
+		if m.library.cancel != nil {
+			m.library.cancel()
+		}
+		return m, tea.Quit
+	}
 	if m.shortcutHelp {
 		return m.shortcutKey(k), nil
 	}
@@ -13,11 +26,10 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if k.String() == "x" {
 			m.run.cancel()
 		}
-		if k.String() == "q" {
-			m.run.cancel()
-			return m, tea.Quit
-		}
 		return m, nil
+	}
+	if m.eng != nil && m.screen != screenDevices && m.screen != screenBrowse {
+		return m.workspaceKey(k)
 	}
 	if m.screen == screenLibrary {
 		return m.libraryKey(k)
@@ -38,9 +50,6 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.Paste {
 		cmd := m.paste(string(k.Runes))
 		return m, cmd
-	}
-	if k.String() == "q" {
-		return m, tea.Quit
 	}
 	switch k.String() {
 	case "pgup":
@@ -76,6 +85,8 @@ func (m *model) paste(text string) tea.Cmd {
 	case screenDevices, screenBrowse:
 		return m.use(trim(text))
 	case screenSources:
+		return m.add(fields(text))
+	case screenLibrary, screenSettings:
 		return m.add(fields(text))
 	case screenMissing:
 		if list := m.eng.Missing(); len(list) > 0 {

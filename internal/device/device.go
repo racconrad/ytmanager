@@ -19,14 +19,19 @@ func IsMTP(path string) bool {
 	return strings.Contains(filepath.ToSlash(path), "/gvfs/mtp:host=")
 }
 
-// List returns ~/Music followed by every removable drive and phone storage found.
-func List() []Mount {
+func RemovableRoots() []string {
+	return append(drives(), phoneStorages()...)
+}
+
+// List returns destination folders and the detected roots that contain removable ones.
+func List() ([]Mount, []string) {
 	var paths []string
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, "Music"))
 	}
-	paths = append(paths, drives()...)
-	for _, p := range phoneStorages() {
+	driveRoots, phoneRoots := drives(), phoneStorages()
+	paths = append(paths, driveRoots...)
+	for _, p := range phoneRoots {
 		paths = append(paths, filepath.Join(p, "Music"))
 	}
 	out := make([]Mount, len(paths))
@@ -37,7 +42,7 @@ func List() []Mount {
 			out[i].Free = Free(filepath.Dir(p))
 		}
 	}
-	return out
+	return out, append(driveRoots, phoneRoots...)
 }
 
 // Resolve turns what the user typed or pasted into a real path: expands ~/ and maps

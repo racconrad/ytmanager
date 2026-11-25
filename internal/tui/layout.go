@@ -55,10 +55,20 @@ func (m model) logHeight() int {
 }
 
 func (m model) logPage() int {
+	if m.workspaceVisible() && !m.wideActivityFooter() {
+		return 1
+	}
 	return min(6, max(1, (m.terminalHeight()-12)/3))
 }
 
 func (m model) footerHeight(help string) int {
+	if m.workspaceVisible() {
+		n := m.activityFooterHeight() + len(m.helpLines(help))
+		if m.prompt != promptNone {
+			n++
+		}
+		return n
+	}
 	n := 1 + len(m.helpLines(help))
 	if m.prompt != promptNone {
 		n += 2

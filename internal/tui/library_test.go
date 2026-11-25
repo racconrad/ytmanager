@@ -35,27 +35,26 @@ func libraryModel(t *testing.T) model {
 	if err := m.openDest(root); err != nil {
 		t.Fatal(err)
 	}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	m = next.(model)
 	if cmd == nil {
 		t.Fatal("library did not scan on entry")
 	}
-	next, _ = m.Update(cmd())
-	return press(next.(model), "b")
+	return finishTestLibraryScan(t, m, cmd)
 }
 
 func TestLibrarySearchCancelAndFilteredDeletion(t *testing.T) {
-	m := libraryModel(t)
+	m := press(libraryModel(t), "enter")
 	m = press(m, "a", "/", "Song", "enter", "d")
-	if len(m.library.confirm) != 2 {
-		t.Fatalf("hidden marks included: %v", m.library.confirm)
+	if len(m.ws.deleteReview) != 2 {
+		t.Fatalf("hidden marks included: %+v", m.ws.deleteReview)
 	}
 	m = press(m, "esc")
 	if len(m.eng.Library()) != 3 {
 		t.Fatal("cancel removed files")
 	}
 	m = press(m, "/", "esc")
-	if m.library.query != "Song" {
+	if m.ws.query != "Song" {
 		t.Fatal("cancel lost prior search")
 	}
 	m = press(m, "d")
@@ -76,9 +75,17 @@ func TestLibrarySearchCancelAndFilteredDeletion(t *testing.T) {
 
 func TestLibraryDuplicateFilterAndBounds(t *testing.T) {
 	m := libraryModel(t)
-	m = press(m, "f")
-	if len(m.libraryRows()) != 2 {
-		t.Fatal("duplicate filter")
+	// Write identical bytes to a.opus and b.opus so scan flags genuine byte-identical duplicates.
+	for _, name := range []string{"a.opus", "b.opus"} {
+		if err := os.WriteFile(filepath.Join(m.eng.Root(), name), []byte("identical-bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = next.(model)
+	m = press(finishTestLibraryScan(t, m, cmd), "4", "/", "SHA-256", "enter")
+	if len(m.filteredIssues()) != 2 {
+		t.Fatalf("expected 2 duplicate issues, got %d", len(m.filteredIssues()))
 	}
 	for _, size := range [][2]int{{30, 12}, {48, 18}, {80, 24}, {120, 40}} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
@@ -94,7 +101,7 @@ func TestLibraryDuplicateFilterAndBounds(t *testing.T) {
 						t.Fatal("too wide")
 					}
 				}
-				if state.library.confirm != nil && !strings.Contains(ansi.Strip(view), "esc cancel") {
+				if state.ws.deleteReview != nil && !strings.Contains(ansi.Strip(view), "esc cancel") {
 					t.Fatal("missing cancellation", view)
 				}
 			}
@@ -104,11 +111,10 @@ func TestLibraryDuplicateFilterAndBounds(t *testing.T) {
 
 func TestLibraryBusyEntryIsBlocked(t *testing.T) {
 	m := libraryModel(t)
-	m.screen = screenSources
 	m.run.busy = true
-	m = press(m, "l")
-	if m.screen != screenSources {
-		t.Fatal("opened during downloads")
+	m = press(m, "d")
+	if m.ws.deleteReview != nil {
+		t.Fatal("opened deletion confirm during downloads")
 	}
 }
 
@@ -118,20 +124,16 @@ func TestLibraryConfirmationScrollsWithLogsAtMinimumSize(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		m.library.all = append(m.library.all, engine.LibraryTrack{ID: fmt.Sprint(i), Title: fmt.Sprintf("Track %02d", i), Path: fmt.Sprintf("%02d.opus", i)})
 	}
+	m.refreshWorkspace()
+	m = press(m, "2", "enter")
 	m.log("Earlier download message")
 	logCount := len(m.logs)
 	m = press(m, "a", "d")
 	for _, key := range []string{"down", "end", "home"} {
 		m = press(m, key)
 		view := ansi.Strip(m.View())
-		target := m.library.confirm[m.cursor]
-		var row engine.LibraryTrack
-		for _, r := range m.library.all {
-			if r.ID == target {
-				row = r
-			}
-		}
-		for _, want := range []string{row.Title, row.Path, "u restores.", "Skipped by future syncs.", "esc cancel"} {
+		row := m.ws.deleteReview[m.ws.deleteCursor]
+		for _, want := range []string{row.Title, row.Path, "Cannot be restored", "All managed lists", "esc cancel"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("missing %q at %s:\n%s", want, key, view)
 			}
@@ -142,27 +144,24 @@ func TestLibraryConfirmationScrollsWithLogsAtMinimumSize(t *testing.T) {
 	}
 }
 
-func TestAlbumReviewProtectsSharedTracksAndCanIncludeThem(t *testing.T) {
+func TestAlbumPermanentReviewShowsAllSharedTracksBeforeConfirmation(t *testing.T) {
 	m := libraryModel(t)
 	for i := range m.library.all {
 		m.library.all[i].Album = "Album"
 		m.library.all[i].Artist = "Artist"
 		m.library.all[i].References = 2
 	}
-	m = press(m, "b", "d")
-	if len(m.library.candidates) != 3 || len(m.library.confirm) != 0 {
-		t.Fatalf("shared tracks not excluded: %+v", m.library)
-	}
-	m = press(m, "h")
-	if len(m.library.confirm) != 3 {
-		t.Fatal("cannot explicitly include shared tracks")
+	m.refreshWorkspace()
+	m = press(m, "d")
+	if len(m.ws.deleteReview) != 3 || !strings.Contains(ansi.Strip(m.View()), "All managed lists") {
+		t.Fatalf("review does not show the scope of shared deletion: %+v", m.ws.deleteReview)
 	}
 	m = press(m, "esc", "enter")
-	if m.library.album == "" || len(m.libraryRows()) != 3 {
+	if m.ws.albumKey == "" || len(m.filteredAlbumTracks(m.ws.albums[0])) != 3 {
 		t.Fatal("album navigation failed")
 	}
 	m = press(m, "esc")
-	if m.library.album != "" || m.screen != screenLibrary {
+	if m.ws.albumKey != "" || m.ws.section != secAlbums {
 		t.Fatal("album back failed")
 	}
 }
@@ -173,14 +172,13 @@ func TestLibraryMutationKeepsExternalInventoryAndReportsPhysicalCounts(t *testin
 	os.WriteFile(external, []byte("external"), 0600)
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	m = next.(model)
-	next, _ = m.Update(cmd())
-	m = next.(model)
-	m = press(m, "/", "Other", "enter", "d")
+	m = finishTestLibraryScan(t, m, cmd)
+	m = press(m, "2", "enter", "/", "Other", "enter", "d")
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
 	next, _ = m.Update(cmd())
 	m = next.(model)
-	if m.library.report == nil || m.library.report.Deleted != 1 {
+	if !strings.Contains(strings.Join(m.logs, "\n"), "1 permanently deleted") {
 		t.Fatal("no physical deletion report")
 	}
 	found := false
@@ -192,11 +190,9 @@ func TestLibraryMutationKeepsExternalInventoryAndReportsPhysicalCounts(t *testin
 	if !found {
 		t.Fatal("external files disappeared after managed deletion")
 	}
-	m = press(m, "esc", "/")
-	m.input.SetValue("external")
-	m = press(m, "enter", "o")
-	if len(m.libraryRows()) != 1 {
-		t.Fatal("cleanup filter missed unlisted external audio")
+	m = press(m, "esc", "4", "/", "external", "enter")
+	if len(m.filteredIssues()) != 1 {
+		t.Fatalf("issues filter missed unlisted external audio: %+v", m.filteredIssues())
 	}
 	m = press(m, "d", "esc")
 	if _, err := os.Stat(external); err != nil {
@@ -210,12 +206,17 @@ func TestLibraryToolsAndReportsFitSmallTerminals(t *testing.T) {
 		m.width, m.height = size[0], size[1]
 		report := engine.FileReport{Items: []engine.FileResult{{Path: strings.Repeat("very/long/", 15), Outcome: "failed", Error: "disk full"}}}
 		plan := engine.LibraryPlan{Changes: []engine.LibraryChange{{Track: m.library.all[0], To: strings.Repeat("new/folder/", 10)}}}
-		states := []model{press(m, "?"), press(m, "t"), press(m, "i"), press(m, "u"), press(m, "X")}
+		restoreState := m
+		restoreState.screen, restoreState.library.restore = screenLibrary, true
+		purgeState := m
+		purgeState.screen, purgeState.library.purge = screenLibrary, true
+		toolsState := press(m, "right", "down", "down", "enter")
+		states := []model{press(m, "?"), toolsState, restoreState, purgeState}
 		state := m
-		state.library.report = &report
+		state.screen, state.library.report = screenLibrary, &report
 		states = append(states, state)
 		state = m
-		state.library.plan = &plan
+		state.screen, state.library.plan = screenLibrary, &plan
 		states = append(states, state)
 		for _, state := range states {
 			view := state.View()
@@ -237,12 +238,14 @@ func TestLibraryToolsAndReportsFitSmallTerminals(t *testing.T) {
 
 func TestLibraryMarksAndBrowsesDuringRescan(t *testing.T) {
 	m := libraryModel(t)
+	m.library.all = append(m.library.all, engine.LibraryTrack{ID: "d", Album: "Album 2", Title: "Song 2", Path: "Album 2/d.opus"})
+	m.refreshWorkspace()
 	m.library.scanning = true // a slow phone rescan is in progress
 	m = press(m, "down", " ")
-	if m.cursor != 1 || len(m.library.marked) != 1 {
-		t.Fatalf("rescan blocked browsing: cursor=%d marked=%v", m.cursor, m.library.marked)
+	if m.ws.listCursor != 1 || len(m.ws.markedAlbums) != 1 {
+		t.Fatalf("rescan blocked browsing: cursor=%d marked=%v", m.ws.listCursor, m.ws.markedAlbums)
 	}
-	if m = press(m, "d"); m.library.candidates != nil {
+	if m = press(m, "d"); m.ws.deleteReview != nil {
 		t.Fatal("deletion review started before the scan finished")
 	}
 }

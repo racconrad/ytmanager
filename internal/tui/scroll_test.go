@@ -61,7 +61,7 @@ func assertFits(t *testing.T, m model) string {
 }
 
 func TestLibraryFitsTerminalAndKeepsSelectionVisible(t *testing.T) {
-	m := scrollModel(t)
+	m := press(scrollModel(t), "3")
 	for i := range 40 {
 		m.log(fmt.Sprintf("error %03d: %s; sync (Enter) to restore it", i, strings.Repeat("音楽", 20)))
 	}
@@ -99,7 +99,7 @@ func TestLibraryFitsTerminalAndKeepsSelectionVisible(t *testing.T) {
 }
 
 func TestSourceScrollPreservesIdentity(t *testing.T) {
-	m := scrollModel(t)
+	m := press(scrollModel(t), "3")
 	m = keyType(m, tea.KeyEnd)
 	m = press(m, " ")
 	urls := m.pickedURLs(m.eng.Snapshot())

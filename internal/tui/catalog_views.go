@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"ytmanager/internal/engine"
 	"ytmanager/internal/ytdlp"
 )
 
@@ -153,7 +154,11 @@ func (m *model) collectionView(b *strings.Builder, w int) {
 	if title == "" {
 		title = "Collection"
 	}
-	writeCatalogLine(b, w, hi.Render(title))
+	headerTitle := title
+	if m.collection.filesMode && m.collection.preview == nil {
+		headerTitle += " · Source files"
+	}
+	writeCatalogLine(b, w, hi.Render(headerTitle))
 
 	meta := []string{countLabel(len(c.Tracks), "track")}
 	year := oneLine(c.Year)
@@ -164,27 +169,75 @@ func (m *model) collectionView(b *strings.Builder, w int) {
 	if creator != "" {
 		meta = append(meta, "By "+creator)
 	}
-	rows := make([]string, 0, len(c.Tracks))
+	if m.collection.preview == nil && len(c.Tracks) > 0 {
+		switch {
+		case c.Failed == 0 && c.Missing == 0 && c.Pending == 0 && c.Synced > 0:
+			meta = append(meta, fmt.Sprintf("%d/%d synced", c.Synced, len(c.Tracks)))
+		default:
+			meta = append(meta, fmt.Sprintf("%d/%d synced", c.Synced, len(c.Tracks)))
+			if c.Failed > 0 {
+				meta = append(meta, fmt.Sprintf("%d failed", c.Failed))
+			}
+			if c.Missing > 0 {
+				meta = append(meta, fmt.Sprintf("%d missing", c.Missing))
+			}
+			if c.Pending > 0 {
+				meta = append(meta, fmt.Sprintf("%d pending", c.Pending))
+			}
+		}
+	}
+	rows := make([]string, 0, len(c.Tracks)*2)
 	cursor := max(0, min(m.cursor, len(c.Tracks)-1))
 	var focusStatus string
+	var focusTrack engine.CollectionTrack
 	var totalDuration float64
 	for i, t := range c.Tracks {
-		title := oneLine(t.Title)
-		if title == "" {
-			title = "Untitled track"
+		trackTitle := oneLine(t.Title)
+		if trackTitle == "" {
+			trackTitle = "Untitled track"
 		}
 		status := trackStatus(t.Status)
+		active := false
 		if j := m.run.jobs[t.ID]; j != nil {
 			status = oneLine(jobStatus(j))
-		}
-		label := fmt.Sprintf("%02d  %s", i+1, title)
-		if i == cursor {
-			focusStatus = status
-		} else {
-			label += dim.Render(" · " + status)
+			active = true
 		}
 		if t.Duration > 0 && t.Duration < 86400 {
 			totalDuration += t.Duration
+		}
+		if i == cursor {
+			focusTrack = t
+			focusStatus = status
+			if !active && t.Error != "" && (t.Status == "failed" || t.Status == "unavailable") {
+				focusStatus = status + ": " + oneLine(t.Error)
+			} else if !active && m.collection.preview == nil && t.Path != "" && !m.collection.filesMode {
+				focusStatus = status + " · " + oneLine(t.Path)
+			}
+		}
+		if m.collection.filesMode && m.collection.preview == nil {
+			syncTag := collectionSyncBadge(t, status, active)
+			label := fmt.Sprintf("%02d  %s", i+1, trackTitle)
+			if t.Duration > 0 && t.Duration < 86400 {
+				label += dim.Render(" · " + catalogDuration(t.Duration))
+			}
+			label += " · " + syncTag
+			sub := dim.Render("    Not downloaded yet")
+			switch {
+			case t.Error != "" && (t.Status == "failed" || t.Status == "unavailable"):
+				sub = bad.Render("    ✗ " + oneLine(t.Error))
+			case t.Status == "missing" && t.Path != "":
+				sub = bad.Render("    ! Missing on disk: " + oneLine(t.Path))
+			case t.Path != "":
+				sub = dim.Render("    " + oneLine(t.Path))
+			}
+			rows = append(rows, pick(i == cursor, label), sub)
+			continue
+		}
+		label := fmt.Sprintf("%02d  %s", i+1, trackTitle)
+		if i != cursor {
+			label += dim.Render(" · " + status)
+		}
+		if t.Duration > 0 && t.Duration < 86400 {
 			label += dim.Render(" · " + catalogDuration(t.Duration))
 		}
 		rows = append(rows, pick(i == cursor, label))
@@ -205,32 +258,75 @@ func (m *model) collectionView(b *strings.Builder, w int) {
 		}
 	}
 	var statusLine string
+	statusStyle := hi
+	if !m.artist.inspecting && (focusTrack.Status == "failed" || focusTrack.Status == "missing") {
+		statusStyle = bad
+	}
 	switch {
 	case focusStatus != "" && coverAction != "":
 		separator := " · "
 		statusWidth := m.terminalWidth() - ansi.StringWidth(separator+coverAction)
-		statusLine = hi.Render(ansi.Truncate(focusStatus, statusWidth, "…")) + dim.Render(separator) + styleHelp(coverAction)
+		statusLine = statusStyle.Render(ansi.Truncate(focusStatus, max(1, statusWidth), "…")) + dim.Render(separator) + styleHelp(coverAction)
 	case focusStatus != "":
-		statusLine = hi.Render(focusStatus)
+		statusLine = statusStyle.Render(focusStatus)
 	case coverAction != "":
 		statusLine = styleHelp(coverAction)
 	}
 	if statusLine != "" {
 		writeCatalogLine(b, m.terminalWidth(), statusLine)
 	}
+	group := 1
+	listCur := cursor
+	if m.collection.filesMode && m.collection.preview == nil {
+		group = 2
+		listCur = cursor * 2
+	}
 	if len(rows) == 0 {
 		rows = append(rows, dim.Render("No tracks in collection."))
+		group, listCur = 1, 0
 	}
 	var detail []string
-	if c.Cover != "" {
+	if c.Cover != "" || (m.collection.preview == nil && (m.collection.filesMode || focusTrack.Path != "" || focusTrack.Error != "")) {
 		scope := "Saved source"
 		if m.collection.preview != nil {
 			scope = "Collection preview"
+		} else if c.Failed == 0 && c.Missing == 0 && c.Pending == 0 && c.Synced > 0 {
+			scope = "Synced on disk"
+		} else {
+			scope = fmt.Sprintf("%d/%d synced", c.Synced, len(c.Tracks))
 		}
 		detail = []string{hi.Render(title), dim.Render(scope)}
+		if m.collection.preview == nil && len(c.Tracks) > 0 {
+			if focusTrack.Path != "" {
+				detail = append(detail, dim.Render("File: "+oneLine(focusTrack.Path)))
+			}
+			if focusTrack.Error != "" {
+				detail = append(detail, bad.Render("Error: "+oneLine(focusTrack.Error)))
+			}
+		}
 	}
-	m.renderWithCoverPanel(b, w, rows, cursor, 1, c.Cover, detail)
+	m.renderWithCoverPanel(b, w, rows, listCur, group, c.Cover, detail)
 	m.footer(b, m.help())
+}
+
+func collectionSyncBadge(t engine.CollectionTrack, status string, active bool) string {
+	if active {
+		return hi.Render(status)
+	}
+	switch {
+	case t.Synced:
+		return ok.Render("✓ Synced")
+	case t.Status == "failed":
+		return bad.Render("✗ Failed")
+	case t.Status == "missing":
+		return bad.Render("! Missing")
+	case t.Status == "unavailable":
+		return dim.Render("- Unavailable")
+	case t.Status == "removed":
+		return dim.Render("Removed")
+	default:
+		return dim.Render("· Pending")
+	}
 }
 
 func catalogDuration(duration float64) string {

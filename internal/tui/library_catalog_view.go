@@ -11,8 +11,7 @@ import (
 )
 
 func (m *model) libraryCatalogView(b *strings.Builder, w int) {
-	rows := m.libraryRows()
-	items := m.libraryItemsFrom(rows)
+	rows, items := m.ensureLibraryCache()
 	albumList := m.library.albums && m.library.album == ""
 	label := "Library / Tracks"
 	switch {

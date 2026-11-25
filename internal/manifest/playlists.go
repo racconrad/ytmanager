@@ -39,7 +39,7 @@ func (m *Manifest) PlaylistName(s *Source) string {
 		}
 		if err == nil && stat.Mode().IsRegular() {
 			data, err := os.ReadFile(path)
-			if err == nil && (strings.Contains(string(data), "\n"+sourceMarker+s.ID+"\n") || string(data) == m.PlaylistText(s, false)) {
+			if err == nil && strings.Contains(string(data), "\n"+sourceMarker+s.ID+"\n") {
 				return name
 			}
 		}

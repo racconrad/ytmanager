@@ -14,16 +14,7 @@ func (m model) readingActivity(w int) string {
 	if !m.run.busy || m.run.readingURL == "" {
 		return ""
 	}
-	elapsed := max(time.Duration(0), time.Since(m.run.readingSince)).Truncate(time.Second)
-	frame := []string{"|", "/", "-", "\\"}[m.cat.frame%4]
-	what := "Reading link"
-	if m.run.verb == "repaired" || m.run.verb == "exported" {
-		what = "Checking library files"
-	}
-	label := fmt.Sprintf("%s %s · %s", frame, what, elapsed)
-	if elapsed >= 30*time.Second {
-		label = fmt.Sprintf("%s Still waiting · %s", frame, elapsed)
-	}
+	label, elapsed := m.readingStatus(), m.readingElapsed()
 	width := max(1, w-4)
 	line := "  " + hi.Render(ansi.Truncate(label, width, "…")) + "\n"
 	if m.terminalHeight() >= 24 {
@@ -34,4 +25,21 @@ func (m model) readingActivity(w int) string {
 		line += "  " + dim.Render(ansi.Truncate(detail, width, "…")) + "\n"
 	}
 	return line
+}
+
+func (m model) readingElapsed() time.Duration {
+	return max(time.Duration(0), time.Since(m.run.readingSince)).Truncate(time.Second)
+}
+
+func (m model) readingStatus() string {
+	elapsed := m.readingElapsed()
+	frame := []string{"|", "/", "-", "\\"}[m.cat.frame%4]
+	what := "Reading link"
+	if m.run.verb == "repaired" || m.run.verb == "exported" {
+		what = "Checking library files"
+	}
+	if elapsed >= 30*time.Second {
+		what = "Still waiting"
+	}
+	return fmt.Sprintf("%s %s · %s", frame, what, elapsed)
 }

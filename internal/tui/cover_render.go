@@ -25,11 +25,17 @@ import (
 
 const maxCoverCache = 48
 
+type coverRenderKey struct {
+	key        string
+	cols, rows int
+}
+
 type coverState struct {
-	images  map[string]image.Image
-	order   []string
-	pending map[string]bool
-	failed  map[string]bool
+	images   map[string]image.Image
+	order    []string
+	pending  map[string]bool
+	failed   map[string]bool
+	rendered map[coverRenderKey][]string
 }
 
 type coverLoadedMsg struct {
@@ -97,10 +103,37 @@ func (m *model) storeCover(msg coverLoadedMsg) {
 			oldest := m.covers.order[0]
 			m.covers.order = m.covers.order[1:]
 			delete(m.covers.images, oldest)
+			for k := range m.covers.rendered {
+				if k.key == oldest {
+					delete(m.covers.rendered, k)
+				}
+			}
 		}
 		m.covers.order = append(m.covers.order, msg.key)
 	}
 	m.covers.images[msg.key] = msg.img
+}
+
+func (m *model) renderedCover(key string, img image.Image, cols, rows int) []string {
+	if img == nil || cols <= 0 || rows <= 0 {
+		return nil
+	}
+	if key != "" && m.covers.rendered != nil {
+		if cached, ok := m.covers.rendered[coverRenderKey{key, cols, rows}]; ok {
+			return cached
+		}
+	}
+	lines := renderCoverArt(img, cols, rows)
+	if key != "" {
+		if m.covers.rendered == nil {
+			m.covers.rendered = map[coverRenderKey][]string{}
+		}
+		if len(m.covers.rendered) >= maxCoverCache*2 {
+			m.covers.rendered = map[coverRenderKey][]string{}
+		}
+		m.covers.rendered[coverRenderKey{key, cols, rows}] = lines
+	}
+	return lines
 }
 
 func loadCoverImage(ctx context.Context, key string) (image.Image, error) {
@@ -159,7 +192,7 @@ func loadCoverImage(ctx context.Context, key string) (image.Image, error) {
 
 func decodeCoverBytes(ctx context.Context, data []byte) (image.Image, error) {
 	if img, _, err := image.Decode(bytes.NewReader(data)); err == nil {
-		return img, nil
+		return downsampleCover(img, 192), nil
 	}
 	// Fallback via ffmpeg handles WebP/AVIF thumbnails without extra Go dependencies.
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-i", "pipe:0", "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1")
@@ -168,7 +201,37 @@ func decodeCoverBytes(ctx context.Context, data []byte) (image.Image, error) {
 	if err != nil || len(out) == 0 {
 		return nil, errors.New("unsupported cover image")
 	}
-	return png.Decode(bytes.NewReader(out))
+	img, err := png.Decode(bytes.NewReader(out))
+	if err != nil {
+		return nil, err
+	}
+	return downsampleCover(img, 192), nil
+}
+
+// downsampleCover crops to square and scales down large covers once in the background
+// so both terminal block rendering and Kitty PNG encoding stay instant while scrolling.
+func downsampleCover(img image.Image, maxSide int) image.Image {
+	if img == nil {
+		return nil
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= maxSide && h <= maxSide {
+		return img
+	}
+	side := min(w, h)
+	ox := b.Min.X + (w-side)/2
+	oy := b.Min.Y + (h-side)/2
+	target := min(side, maxSide)
+	dst := image.NewNRGBA(image.Rect(0, 0, target, target))
+	for y := 0; y < target; y++ {
+		sy := oy + y*side/target
+		for x := 0; x < target; x++ {
+			sx := ox + x*side/target
+			dst.Set(x, y, img.At(sx, sy))
+		}
+	}
+	return dst
 }
 
 // renderCoverArt renders img as ANSI truecolor half-block characters (cols wide, rows tall).
