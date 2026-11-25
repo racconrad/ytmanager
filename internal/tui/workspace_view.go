@@ -156,6 +156,9 @@ func (m model) workspaceHelp() string {
 			if alb, ok := m.activeAlbum(); m.ws.section == secSources || ok && alb.HasSource {
 				help += " · - from list"
 			}
+			if m.ws.section == secSources {
+				help += " · tab actions"
+			}
 			return help + " · ↑↓ move · / filter · ? keys"
 		}
 		switch m.ws.section {

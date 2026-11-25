@@ -153,6 +153,9 @@ func (e *Engine) DeletePermanently(ctx context.Context, selected []LibraryTrack)
 	if len(prior) > 0 {
 		for _, s := range e.m.Sources {
 			s.DropTracks(deleted)
+			for id := range deleted {
+				delete(s.Readded, id)
+			}
 		}
 		failures = append(failures, e.m.Save())
 		if len(deleted) > 0 {
@@ -164,8 +167,8 @@ func (e *Engine) DeletePermanently(ctx context.Context, selected []LibraryTrack)
 }
 
 func (e *Engine) blocksTrashRestore(item *trashEntry) bool {
-	for id := range item.Tracks {
-		if track := e.m.Tracks[id]; track != nil && track.PermanentlyRemoved {
+	for id, old := range item.Tracks {
+		if track := e.m.Tracks[id]; track != nil && (track.PermanentlyRemoved || track.ReaddGeneration != old.ReaddGeneration) {
 			return true
 		}
 	}

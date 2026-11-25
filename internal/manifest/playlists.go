@@ -97,23 +97,45 @@ func (m *Manifest) WritePlaylists() error {
 		}
 	}
 	for _, s := range m.Sources {
-		if s.Type == "track" {
-			continue
-		}
-		name := m.PlaylistName(s)
-		content := m.PlaylistText(s, true)
-		path := filepath.Join(m.Root, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := m.writeSourcePlaylist(s, false); err != nil {
 			return err
 		}
-		exported := strings.TrimSuffix(path, ".m3u8") + ".m3u"
-		if old, err := os.ReadFile(exported); err == nil && strings.HasPrefix(string(old), ExportMarker) {
-			if err := os.WriteFile(exported, []byte(ExportMarker+strings.TrimPrefix(content, "#EXTM3U\n")), 0644); err != nil {
-				return err
-			}
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	}
+	return nil
+}
+
+// WriteSourcePlaylist refreshes one managed export without rewriting other lists.
+func (m *Manifest) WriteSourcePlaylist(s *Source) error {
+	return m.writeSourcePlaylist(s, true)
+}
+
+func (m *Manifest) writeSourcePlaylist(s *Source, requireOwner bool) error {
+	if s.Type == "track" {
+		return nil
+	}
+	path := filepath.Join(m.Root, m.PlaylistName(s))
+	content := m.PlaylistText(s, true)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return err
+	}
+	exported := strings.TrimSuffix(path, ".m3u8") + ".m3u"
+	info, err := os.Lstat(exported)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	old, err := os.ReadFile(exported)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(string(old), ExportMarker) &&
+		(!requireOwner || strings.Contains(string(old), "\n"+sourceMarker+s.ID+"\n")) {
+		return os.WriteFile(exported, []byte(ExportMarker+strings.TrimPrefix(content, "#EXTM3U\n")), 0644)
 	}
 	return nil
 }

@@ -57,52 +57,10 @@ func (e *Engine) recoverExisting(ctx context.Context, sources []string, emit fun
 		return nil
 	}
 	if index == nil {
-		index = map[string][]string{}
-		files = nil
-		emit(Event{Kind: EvLog, Msg: "Checking existing files before downloading missing tracks…"})
-		err := filepath.WalkDir(e.Root(), func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if strings.EqualFold(d.Name(), trashDir) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Type()&os.ModeSymlink != 0 || !audioExtension(p) {
-				return nil
-			}
-			rel, _ := filepath.Rel(e.Root(), p)
-			stat, err := d.Info()
-			if err != nil {
-				return nil
-			}
-			cached, hit := e.probes.get(rel, stat)
-			info := cached.Info
-			if !hit {
-				if info, err = ytdlp.Probe(ctx, p); ctx.Err() != nil {
-					return ctx.Err()
-				} else if err != nil {
-					return nil
-				}
-				e.probes.put(rel, stat, info, "")
-			}
-			id := embeddedID(info.Tags)
-			if id != "" {
-				index[id] = append(index[id], rel)
-			}
-			if cand, ok := candidateFromInfo(rel, id, info.Tags, info.Duration); ok {
-				files = append(files, cand)
-			}
-			return nil
-		})
-		_ = e.probes.save()
+		var err error
+		index, files, err = e.indexExistingAudio(ctx, emit)
 		if err != nil {
-			return fmt.Errorf("could not inspect existing music: %w", err)
+			return err
 		}
 		e.mu.Lock()
 		e.physicalIndex = index
@@ -204,6 +162,57 @@ func (e *Engine) recoverExisting(ctx context.Context, sources []string, emit fun
 		emit(Event{Kind: EvLog, Msg: "Reused existing audio: " + title})
 	}
 	return nil
+}
+
+func (e *Engine) indexExistingAudio(ctx context.Context, emit func(Event)) (map[string][]string, []physicalCandidate, error) {
+	index := map[string][]string{}
+	var files []physicalCandidate
+	emit(Event{Kind: EvLog, Msg: "Checking existing files before downloading missing tracks…"})
+	err := filepath.WalkDir(e.Root(), func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if strings.EqualFold(d.Name(), trashDir) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 || !audioExtension(p) {
+			return nil
+		}
+		rel, _ := filepath.Rel(e.Root(), p)
+		stat, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		cached, hit := e.probes.get(rel, stat)
+		info := cached.Info
+		if !hit {
+			if info, err = ytdlp.Probe(ctx, p); ctx.Err() != nil {
+				return ctx.Err()
+			} else if err != nil {
+				return nil
+			}
+			e.probes.put(rel, stat, info, "")
+		}
+		id := embeddedID(info.Tags)
+		if id != "" {
+			index[id] = append(index[id], rel)
+		}
+		if cand, ok := candidateFromInfo(rel, id, info.Tags, info.Duration); ok {
+			files = append(files, cand)
+		}
+		return nil
+	})
+	_ = e.probes.save()
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not inspect existing music: %w", err)
+	}
+	return index, files, nil
 }
 
 func trackMatchIDs(id string, t *manifest.Track) []string {
@@ -375,7 +384,10 @@ func (e *Engine) promoteSingleToAlbum(ctx context.Context, id, rel string) (stri
 	return promoteSingleWithManifest(ctx, e.Root(), e.opt.Folders, e.m, &e.mu, id, rel)
 }
 
-func promoteSingleWithManifest(ctx context.Context, root, folders string, m *manifest.Manifest, mu interface{ Lock(); Unlock() }, id, rel string) (string, error) {
+func promoteSingleWithManifest(ctx context.Context, root, folders string, m *manifest.Manifest, mu interface {
+	Lock()
+	Unlock()
+}, id, rel string) (string, error) {
 	if folders != "" || rel == "" || !strings.EqualFold(filepath.Base(filepath.Dir(rel)), "Singles") {
 		return rel, nil
 	}

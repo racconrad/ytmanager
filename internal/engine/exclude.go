@@ -36,6 +36,10 @@ func (e *Engine) ExcludeSourceTracks(sourceID string, ids []string) (int, error)
 		source.Excluded = make(map[string]bool, len(drop))
 	}
 	maps.Copy(source.Excluded, drop)
+	source.Readded = maps.Clone(source.Readded)
+	for id := range drop {
+		delete(source.Readded, id)
+	}
 	source.DropTracks(drop)
 	if err := e.m.Save(); err != nil {
 		*source = previous

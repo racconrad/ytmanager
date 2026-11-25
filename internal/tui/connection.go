@@ -12,8 +12,9 @@ import (
 
 // lost remembers an unplugged destination and the links that were syncing, to resume them.
 type lost struct {
-	path string
-	urls []string
+	path  string
+	urls  []string
+	readd bool
 }
 
 // detect runs every 2 s off the UI goroutine: mounts phones, refreshes the device list and checks
@@ -69,7 +70,8 @@ func (m model) watched() string {
 // unplugged goes back to the device list when the open folder disappears without unmounting,
 // remembering what was syncing so reconnect can pick it up.
 func (m *model) unplugged(p string) {
-	m.lost = &lost{path: p}
+	m.lost = &lost{path: p, readd: m.run.busy && m.run.verb == readdVerb}
+	m.ws.readd = nil
 	if m.run.busy {
 		m.lost.urls = slices.Concat(m.run.urls, m.run.queue)
 		m.run.cancel()
@@ -83,7 +85,13 @@ func (m *model) unplugged(p string) {
 	m.browseReturn, m.spaceKnown = false, false
 	m.marked = map[string]bool{}
 	m.input.Reset()
-	m.log(bad.Render("✗ " + device.Label(p) + " was disconnected. Plug it back in and it will resume by itself."))
+	msg := "✗ " + device.Label(p) + " was disconnected."
+	if m.lost.readd {
+		msg += " Reopen Re-add track after reconnecting."
+	} else {
+		msg += " Plug it back in and it will resume by itself."
+	}
+	m.log(bad.Render(msg))
 }
 
 // reconnect reopens the lost destination once it is back, and resumes its sync if one was running.
@@ -98,7 +106,7 @@ func (m *model) reconnect() tea.Cmd {
 	}
 	m.lost = nil
 	m.log(ok.Render("✓ " + device.Label(l.path) + " is back."))
-	if len(l.urls) == 0 && !m.eng.HasPending() {
+	if l.readd || len(l.urls) == 0 && !m.eng.HasPending() {
 		return m.openDestinationDetails()
 	}
 	m.log(dim.Render("Resuming the download…"))

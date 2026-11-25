@@ -34,6 +34,7 @@ type Source struct {
 	Order       []string  `json:"order,omitempty"`
 
 	Excluded map[string]bool `json:"excluded,omitempty"`
+	Readded  map[string]bool `json:"readded,omitempty"`
 }
 
 type Track struct {
@@ -50,6 +51,7 @@ type Track struct {
 	Fails              int     `json:"fails,omitempty"` // consecutive non-network failures
 	Local              bool    `json:"local,omitempty"` // imported file; never fetch its synthetic ID
 	PermanentlyRemoved bool    `json:"permanently_removed,omitempty"`
+	ReaddGeneration    uint64  `json:"readd_generation,omitempty"`
 }
 
 type Manifest struct {
@@ -103,7 +105,7 @@ func (m *Manifest) Merge(typ, id, title, url string, entries []Entry) *Source {
 	}
 	for _, e := range entries {
 		t := m.Tracks[e.ID]
-		if s.Excluded[e.ID] || (t != nil && t.PermanentlyRemoved) {
+		if s.blocksTrack(e.ID, t) {
 			continue
 		}
 		if typ != "mix" {
@@ -131,10 +133,24 @@ func (m *Manifest) Merge(typ, id, title, url string, entries []Entry) *Source {
 			}
 		}
 	}
+	// Explicit local additions also survive a listing that no longer contains them.
+	var readded []string
+	for id, added := range s.Readded {
+		if t := m.Tracks[id]; added && t != nil && !have[id] && !s.blocksTrack(id, t) {
+			readded = append(readded, id)
+		}
+	}
+	slices.Sort(readded)
+	s.Tracks = append(s.Tracks, readded...)
+	order = append(order, readded...)
 	if len(order) > len(s.Tracks) {
 		s.Order = order
 	}
 	return s
+}
+
+func (s *Source) blocksTrack(id string, t *Track) bool {
+	return s.Excluded[id] || (t != nil && (t.PermanentlyRemoved || t.ReaddGeneration > 0 && !s.Readded[id]))
 }
 
 // TrackOrder preserves repeated entries without duplicating download jobs.

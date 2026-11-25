@@ -68,6 +68,7 @@ type workspaceState struct {
 	markedSourceTracks map[string]bool
 	markedFiles        map[string]bool
 	markedIssues       map[string]bool
+	readd              *readdState
 	deleteReview       []engine.LibraryTrack
 	deleteCursor       int
 	removing           bool
@@ -545,7 +546,7 @@ func (m model) workspaceActions() []wsAction {
 
 	case secSources:
 		if m.ws.sourceID != "" {
-			acts := []wsAction{{"back_source", "Back to sources"}}
+			acts := []wsAction{{"readd_track", "Re-add track…"}, {"back_source", "Back to sources"}}
 			if len(m.filteredSourceTracks()) > 0 {
 				acts = append(acts, wsAction{"exclude_tracks", "Remove from this list (-)"}, wsAction{"delete_permanent", "Delete from all lists (d)"})
 			}
@@ -627,6 +628,9 @@ func (m model) workspaceActions() []wsAction {
 func (m *model) workspaceKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.syncWorkspaceFromState()
 	key := k.String()
+	if m.ws.readd != nil {
+		return m.trackReaddKey(k)
+	}
 	if m.ws.deleteReview != nil || m.ws.removing {
 		if key == "x" && m.ws.removing && m.library.cancel != nil {
 			m.library.cancel()
@@ -1202,6 +1206,9 @@ func (m *model) runWorkspaceAction(action string) (tea.Model, tea.Cmd) {
 		return *m, m.setSection(secSources)
 	case "details_issues":
 		return *m, m.setSection(secIssues)
+	case "readd_track":
+		m.openTrackReadd()
+		return *m, nil
 	case "exclude_tracks", "delete_permanent":
 		return m.startWorkspaceRemoval(action)
 	case "open_album":

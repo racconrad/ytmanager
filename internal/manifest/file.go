@@ -111,15 +111,24 @@ func read(root, p string) (*Manifest, error) {
 	if m.Tracks == nil {
 		m.Tracks = map[string]*Track{}
 	}
-	deleted := map[string]bool{}
-	for id, track := range m.Tracks {
-		if track != nil && track.PermanentlyRemoved {
-			deleted[id] = true
+	for _, source := range m.Sources {
+		var dropped map[string]bool
+		for _, id := range source.Tracks {
+			t := m.Tracks[id]
+			if source.blocksTrack(id, t) {
+				if dropped == nil {
+					dropped = make(map[string]bool)
+				}
+				dropped[id] = true
+			}
 		}
-	}
-	if len(deleted) > 0 {
-		for _, source := range m.Sources {
-			source.DropTracks(deleted)
+		for id := range source.Readded {
+			if t := m.Tracks[id]; t == nil || t.PermanentlyRemoved {
+				delete(source.Readded, id)
+			}
+		}
+		if len(dropped) != 0 {
+			source.DropTracks(dropped)
 		}
 	}
 	return m, nil

@@ -38,11 +38,15 @@ func (m model) View() string {
 		return m.welcomeView()
 	}
 	w := m.terminalWidth() - 4
-	if m.ws.deleteReview != nil {
+	if m.ws.readd != nil || m.ws.deleteReview != nil {
 		if m.overlay != nil {
 			m.overlay.setPlacement(nil)
 		}
-		m.workspaceDeleteReview(&b)
+		if m.ws.readd != nil {
+			m.trackReaddView(&b)
+		} else {
+			m.workspaceDeleteReview(&b)
+		}
 		return fitLines(b.String(), m.terminalWidth(), m.terminalHeight())
 	}
 	if m.workspaceVisible() {

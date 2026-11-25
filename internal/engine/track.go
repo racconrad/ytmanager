@@ -13,6 +13,10 @@ import (
 
 // track downloads one track and records the result; it returns false if ctx stopped it midway.
 func (e *Engine) track(ctx context.Context, id string, emit func(Event)) bool {
+	return e.downloadTrack(ctx, id, emit, true)
+}
+
+func (e *Engine) downloadTrack(ctx context.Context, id string, emit func(Event), promoteExisting bool) bool {
 	e.mu.Lock()
 	t := e.m.Tracks[id]
 	title, root, format := t.Title, e.m.Root, e.m.Format
@@ -49,7 +53,7 @@ func (e *Engine) track(ctx context.Context, id string, emit func(Event)) bool {
 			return false
 		}
 		defer releaseDL()
-		if reused, ok := e.reuseResolvedTrack(ctx, id, res.DownloadID); ok {
+		if reused, ok := e.reuseResolvedTrack(ctx, id, res.DownloadID, promoteExisting); ok {
 			emit(Event{Kind: EvLog, Msg: "Reused existing audio: " + title})
 			emit(Event{Kind: EvDone, ID: id, Title: title, Msg: reused})
 			return true
@@ -147,7 +151,7 @@ func (e *Engine) acquireDownloadID(ctx context.Context, dlID string) (func(), bo
 	}
 }
 
-func (e *Engine) reuseResolvedTrack(ctx context.Context, id, dlID string) (string, bool) {
+func (e *Engine) reuseResolvedTrack(ctx context.Context, id, dlID string, promoteExisting bool) (string, bool) {
 	e.mu.Lock()
 	t := e.m.Tracks[id]
 	if t == nil || t.Status == manifest.StatusRemoved {
@@ -155,14 +159,16 @@ func (e *Engine) reuseResolvedTrack(ctx context.Context, id, dlID string) (strin
 		return "", false
 	}
 	path, lyr, ok := e.findExistingForIDLocked(id, dlID)
-	if !ok {
+	if !ok || !promoteExisting && !containedAudioPath(e.m.Root, path) {
 		e.mu.Unlock()
 		return "", false
 	}
 	e.mu.Unlock()
 
-	if promoted, err := e.promoteSingleToAlbum(ctx, id, path); err == nil && promoted != "" {
-		path = promoted
+	if promoteExisting {
+		if promoted, err := e.promoteSingleToAlbum(ctx, id, path); err == nil && promoted != "" {
+			path = promoted
+		}
 	}
 
 	e.mu.Lock()
