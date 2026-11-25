@@ -151,7 +151,7 @@ func (m *model) apply(e engine.Event) {
 			m.log(bad.Render("✗ " + e.Title + ": " + e.Msg))
 		case engine.EvUnavailable:
 			r.unavailable++
-			m.log(dim.Render("- " + e.Title + ": " + e.Msg + " (n to retry or set an alternative)"))
+			m.log(dim.Render("- " + e.Title + ": " + e.Msg + " (4 to review)"))
 		}
 		delete(r.jobs, e.ID)
 		for i, id := range r.order {
@@ -179,20 +179,20 @@ func (m *model) finish(err error) tea.Cmd {
 	case err != nil:
 		m.fail(err)
 		if r.failed > 0 || r.unavailable > 0 {
-			m.log(bad.Render(fmt.Sprintf("%d failed, %d unavailable (v or n to inspect)", r.failed, r.unavailable)))
+			m.log(bad.Render(fmt.Sprintf("%d failed, %d unavailable (4 to review)", r.failed, r.unavailable)))
 		}
 	case r.failed > 0:
 		msg := fmt.Sprintf("✗ Finished with errors: %d %s, %d failed", r.done, r.verb, r.failed)
 		if r.unavailable > 0 {
 			msg += fmt.Sprintf(", %d unavailable", r.unavailable)
 		}
-		msg += " (v or n to inspect)"
+		msg += " (4 to review)"
 		m.log(bad.Render(msg))
 		m.cat.celebrate(true, time.Now())
 	default:
 		msg := fmt.Sprintf("✓ Done: %d %s", r.done, r.verb)
 		if r.unavailable > 0 {
-			msg += fmt.Sprintf(", %d unavailable (n)", r.unavailable)
+			msg += fmt.Sprintf(", %d unavailable (4 to review)", r.unavailable)
 		}
 		m.log(ok.Render(msg))
 		m.cat.celebrate(false, time.Now())
