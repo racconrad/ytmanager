@@ -3,13 +3,14 @@ package ytdlp
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"ytmanager/internal/device"
 )
@@ -27,37 +28,51 @@ func ValidFormat(f string) bool { _, ok := audioArgs[f]; return ok }
 //
 // yt-dlp runs in a local staging folder and the result is copied to root: on MTP (gvfs) yt-dlp
 // cannot move files (no utime) and --windows-filenames would rewrite the ':' in gvfs/mtp:host=….
-// The staging folder is kept when ctx is cancelled, so after a pause yt-dlp
-// continues the .part file instead of starting over.
+// Retryable work stays staged. A retry can resume the .part file once its previous writers stop.
 func Download(ctx context.Context, stageID, infoJSON, root, format, folders, cookies string, progress func(float64)) (string, error) {
-	stage := filepath.Join(os.TempDir(), "ytmanager", stageID)
-	if err := os.MkdirAll(stage, 0o755); err != nil {
+	staging, err := openStageRoot(root, true)
+	if err != nil {
 		return "", err
 	}
-	file, err := run(ctx, stage, infoJSON, format, folders, cookies, progress)
+	defer staging.Close()
+	key := stageKey(stageID, format, folders)
+	lock, err := waitStageLock(ctx, staging, key)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
+	key, err = prepareStage(ctx, staging, key)
+	if err != nil {
+		return "", err
+	}
+	discard, writersStopped := false, false
+	defer func() {
+		if writersStopped && staging.Remove(key+runningSuffix) == nil && discard {
+			discardStage(staging, key)
+		}
+	}()
+	stage := filepath.Join(staging.Name(), key)
+	file, writersStopped, err := run(ctx, stage, infoJSON, format, folders, cookies, progress)
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
 	if err != nil {
-		if !device.IsSpaceError(err) {
-			os.RemoveAll(stage)
-		}
+		retryable := device.IsSpaceError(err) || Transient(err)
+		discard = Unavailable(err) && !retryable
 		return "", err
 	}
 	rel, err := filepath.Rel(stage, file)
 	if err != nil || !filepath.IsLocal(rel) {
-		os.RemoveAll(stage)
+		discard = true
 		return "", fmt.Errorf("yt-dlp returned a file outside the staging directory")
 	}
 	dst, err := copyDownload(file, filepath.Join(root, rel))
-	if !device.IsSpaceError(err) {
-		os.RemoveAll(stage)
-	}
+	discard = err == nil
 	return dst, err
 }
 
-// run executes yt-dlp in stage and returns the absolute path of the file it produced.
-func run(ctx context.Context, stage, infoJSON, format, folders, cookies string, progress func(float64)) (string, error) {
+// run returns the output path and whether the attempt can release its staging marker.
+func run(ctx context.Context, stage, infoJSON, format, folders, cookies string, progress func(float64)) (string, bool, error) {
 	args := append(base(cookies),
 		"--load-info-json", infoJSON,
 		"-f", "bestaudio/best", "-x",
@@ -75,11 +90,12 @@ func run(ctx context.Context, stage, infoJSON, format, folders, cookies string, 
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	defer pw.Close()
-	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	cmd := newDownloadCommand(ctx, args)
 	cmd.Dir = stage
 	cmd.Stdout, cmd.Stderr = pw, pw
+	cmd.WaitDelay = time.Second
 	if err := cmd.Start(); err != nil {
-		return "", processError(err, "could not start yt-dlp")
+		return "", true, processError(err, "could not start yt-dlp")
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait(); pw.Close() }()
@@ -109,20 +125,22 @@ func run(ctx context.Context, stage, infoJSON, format, folders, cookies string, 
 		_, _ = io.Copy(io.Discard, pr)
 	} // let the child finish even after an oversized line
 	err := <-done
-	if ctx.Err() != nil {
-		return "", ctx.Err()
+	ctxErr := ctx.Err()
+	stopped := stageWritersStopped(cmd, ctxErr != nil) && !errors.Is(err, exec.ErrWaitDelay)
+	if ctxErr != nil {
+		return "", stopped, ctxErr
 	}
 	if err != nil {
-		return "", processError(err, diagnostic.detail())
+		return "", stopped && cmd.ProcessState != nil && cmd.ProcessState.Exited(), processError(err, diagnostic.detail())
 	}
 	if scanErr != nil {
-		return "", fmt.Errorf("could not read yt-dlp output: %w", scanErr)
+		return "", stopped, fmt.Errorf("could not read yt-dlp output: %w", scanErr)
 	}
 	if file == "" {
-		return "", fmt.Errorf("yt-dlp did not report the final file")
+		return "", stopped, fmt.Errorf("yt-dlp did not report the final file")
 	}
 	if !filepath.IsAbs(file) {
 		file = filepath.Join(stage, file)
 	}
-	return file, nil
+	return file, stopped, nil
 }

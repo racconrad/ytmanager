@@ -30,7 +30,7 @@ func TestFailedProcessDiagnostics(t *testing.T) {
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_, err := run(ctx, t.TempDir(), "unused.json", "opus", "", "", func(float64) {})
+			_, _, err := run(ctx, t.TempDir(), "unused.json", "opus", "", "", func(float64) {})
 			var exit *exec.ExitError
 			if err == nil || !strings.Contains(err.Error(), tc.want) || !errors.As(err, &exit) {
 				t.Fatalf("diagnostic lost: %v", err)

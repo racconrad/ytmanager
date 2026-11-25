@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestKeyring(t *testing.T) {
@@ -99,6 +101,34 @@ func TestName(t *testing.T) {
 	} {
 		if got, err := Name(context.Background(), tags, "opus", folders); err != nil || got != want {
 			t.Errorf("%q: got %q, %v; want %q", folders, got, err, want)
+		}
+	}
+}
+
+func TestNameBoundsUTF8ComponentsBeforeThumbnailAndPartialSuffixes(t *testing.T) {
+	if _, err := exec.LookPath("yt-dlp"); err != nil {
+		t.Skip("yt-dlp not installed")
+	}
+	for _, title := range []string{
+		"Machine Love (feat. " + strings.Repeat("Guest Artist, ", 32) + "Last Artist)",
+		"Music " + strings.Repeat("音/楽?", 100),
+	} {
+		tags := map[string]string{"title": title, "album_artist": strings.Repeat("Étoile/", 65), "album": strings.Repeat("曲:", 130), "track": "2/12"}
+		for _, folders := range []string{"", "artist", "flat"} {
+			name, err := Name(context.Background(), tags, "opus", folders)
+			if err != nil {
+				t.Fatalf("%q: %v", folders, err)
+			}
+			base := filepath.Base(name)
+			if !strings.Contains(base, strings.Fields(title)[0]) || !strings.HasSuffix(base, ".opus") ||
+				(folders == "" && !strings.HasPrefix(base, "02 - ")) {
+				t.Errorf("%q: did not preserve the track name, extension and numbering: %q", folders, base)
+			}
+			for _, part := range strings.Split(filepath.ToSlash(name), "/") {
+				if !utf8.ValidString(part) || len(part)+len(".webp.part") > 255 {
+					t.Errorf("%q: unsafe output component of %d bytes", folders, len(part))
+				}
+			}
 		}
 	}
 }

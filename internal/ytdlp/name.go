@@ -11,15 +11,20 @@ import (
 	"strings"
 )
 
-// naming makes file names valid on phones and Windows; Name must use the same flags.
-var naming = []string{"--windows-filenames", "--trim-filenames", "180"}
+// Sanitize before truncating UTF-8: Windows-safe replacements can add bytes.
+var naming = []string{
+	"--windows-filenames",
+	"--parse-metadata", "%(album_artist|Unknown)S:%(ytm_file_artist)s",
+	"--parse-metadata", "%(album|Singles)S:%(ytm_file_album)s",
+	"--parse-metadata", "%(track,title)S:%(ytm_file_title)s",
+}
 
 // layouts are the output templates for each Options.Folders value.
-// The artist and flat layouts omit the album; identical artist/title pairs share a path.
+// Leave headroom in each component for extensions, partial files and duplicate suffixes.
 var layouts = map[string]string{
-	"":       "%(album_artist|Unknown)s/%(album|Singles)s/%(ytm_prefix|)s%(track,title)s.%(ext)s",
-	"artist": "%(album_artist|Unknown)s/%(track,title)s.%(ext)s",
-	"flat":   "%(album_artist|Unknown)s - %(track,title)s.%(ext)s",
+	"":       "%(ytm_file_artist).220B/%(ytm_file_album).220B/%(ytm_prefix|).24B%(ytm_file_title).196B.%(ext)s",
+	"artist": "%(ytm_file_artist).220B/%(ytm_file_title).220B.%(ext)s",
+	"flat":   "%(ytm_file_artist).64B - %(ytm_file_title).153B.%(ext)s",
 }
 
 // Name returns the path, relative to the destination, that Download gives a file with these tags
