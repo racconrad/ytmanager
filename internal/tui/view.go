@@ -49,6 +49,13 @@ func (m model) View() string {
 		}
 		return fitLines(b.String(), m.terminalWidth(), m.terminalHeight())
 	}
+	if m.ws.syncPlan != nil {
+		if m.overlay != nil {
+			m.overlay.setPlacement(nil)
+		}
+		m.physicalSyncView(&b)
+		return fitLines(b.String(), m.terminalWidth(), m.terminalHeight())
+	}
 	if m.workspaceVisible() {
 		m.workspaceView(&b)
 		if m.overlay != nil {

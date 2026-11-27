@@ -22,6 +22,9 @@ func (m model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.shortcutHelp {
 		return m.shortcutKey(k), nil
 	}
+	if m.ws.syncPlan != nil {
+		return m.physicalSyncKey(k)
+	}
 	if m.run.busy && (m.run.verb == "repaired" || m.run.verb == "exported") {
 		if k.String() == "x" {
 			m.run.cancel()

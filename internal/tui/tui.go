@@ -307,6 +307,8 @@ func (m model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case workspaceRemovalMsg:
 		return m.finishWorkspaceRemoval(msg)
+	case physicalSyncDoneMsg:
+		return m.finishPhysicalSync(msg)
 	case coverOpenedMsg:
 		if msg.err != nil && (m.screen == screenCollection || m.screen == screenArtist) {
 			m.fail(fmt.Errorf("could not open cover: %w", msg.err))

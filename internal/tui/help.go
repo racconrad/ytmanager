@@ -109,7 +109,7 @@ func (m model) help() string {
 
 func (m model) shortcutList() (string, []string) {
 	if m.eng != nil && m.screen != screenDevices && m.screen != screenBrowse {
-		actions := "↑↓ move in list or actions · →/tab focus actions panel · ←/esc back or top menu · 0 details · 4 review problems · [/] switch tabs · enter open item or run action · space mark items · ctrl+a select or clear all matching items · a add link in Sources · - remove from open album/list, keep audio · d delete selected audio permanently and remove from all lists · / filter list · f find artist · s scan/sync · r repair/retry · p pause downloads · x cancel · q/ctrl+c quit"
+		actions := "↑↓ move in list or actions · →/tab focus actions panel · ←/esc back or top menu · 0 details · 4 review problems · [/] switch tabs · enter open item or run action · P preview selected-folder changes to sources · space mark items · ctrl+a select or clear all matching items · a add link in Sources · - remove from open album/list, keep audio · d delete selected audio permanently and remove from all lists · / filter list · f find artist · s scan/sync · r repair/retry · p pause downloads · x cancel · q/ctrl+c quit"
 		return "Workspace shortcuts", strings.Split(actions, " · ")
 	}
 	var title, actions string

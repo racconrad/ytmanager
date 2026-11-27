@@ -162,8 +162,10 @@ func (m model) workspaceHelp() string {
 			return help + " · ↑↓ move · / filter · ? keys"
 		}
 		switch m.ws.section {
-		case secAlbums, secFolders:
+		case secAlbums:
 			return "space mark · ctrl+a all · ↑↓ move · ? keys · enter open · → actions"
+		case secFolders:
+			return "space mark · ctrl+a all · P sync selected folder to sources · ↑↓ move · ? keys · enter open · → actions"
 		case secSources:
 			return "space mark · ctrl+a all · a add link · ? keys · enter open · → actions"
 		case secIssues:

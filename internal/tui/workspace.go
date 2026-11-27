@@ -69,6 +69,7 @@ type workspaceState struct {
 	markedFiles        map[string]bool
 	markedIssues       map[string]bool
 	readd              *readdState
+	syncPlan           *physicalSyncState
 	deleteReview       []engine.LibraryTrack
 	deleteCursor       int
 	removing           bool
@@ -462,6 +463,9 @@ func (m model) workspaceActions() []wsAction {
 	switch m.ws.section {
 	case secDetails:
 		var acts []wsAction
+		if m.eng != nil && m.eng.HasPending() {
+			acts = append(acts, wsAction{"continue_all", "Continue all downloads"})
+		}
 		if len(m.ws.issues) > 0 {
 			acts = append(acts, wsAction{"details_issues", "Review problems (4)"})
 		}
@@ -530,6 +534,7 @@ func (m model) workspaceActions() []wsAction {
 				{"delete_permanent", "Delete permanently (d)"},
 				{"repair", "Repair / relink files"},
 				{"scan", "Scan device"},
+				{"physical_sync", "Sync this folder to sources (P)"},
 			}
 		}
 		flds := m.filteredFolders()
@@ -545,8 +550,12 @@ func (m model) workspaceActions() []wsAction {
 		return acts
 
 	case secSources:
+		var continueAction []wsAction
+		if m.eng != nil && m.eng.HasPending() {
+			continueAction = append(continueAction, wsAction{"continue_all", "Continue all downloads"})
+		}
 		if m.ws.sourceID != "" {
-			acts := []wsAction{{"readd_track", "Re-add track…"}, {"back_source", "Back to sources"}}
+			acts := append(continueAction, wsAction{"readd_track", "Re-add track…"}, wsAction{"back_source", "Back to sources"})
 			if len(m.filteredSourceTracks()) > 0 {
 				acts = append(acts, wsAction{"exclude_tracks", "Remove from this list (-)"}, wsAction{"delete_permanent", "Delete from all lists (d)"})
 			}
@@ -558,12 +567,12 @@ func (m model) workspaceActions() []wsAction {
 			)
 		}
 		srcs := m.filteredSources()
-		var acts []wsAction
+		acts := continueAction
 		if len(srcs) > 0 {
 			acts = append(acts,
 				wsAction{"add_link", "Add link…"},
 				wsAction{"sync_picked", "Sync selected"},
-				wsAction{"download_picked", "Download / resume"},
+				wsAction{"download_picked", "Download selected sources"},
 				wsAction{"open_source", "Open tracks & files"},
 				wsAction{"find_artist", "Find selected artist"},
 				wsAction{"remove_source", "Remove source (keep audio)"},
@@ -762,6 +771,8 @@ func (m *model) workspaceKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.shortcutHelp, m.shortcutCursor = true, 0
 		return *m, nil
+	case "P":
+		return m.openPhysicalSync()
 	case "g":
 		return *m, m.setSection(secSources)
 	case "l":
@@ -1200,6 +1211,18 @@ func (m model) selectedPhysicalRows() []engine.LibraryTrack {
 func (m *model) runWorkspaceAction(action string) (tea.Model, tea.Cmd) {
 	m.ws.focus = paneList
 	switch action {
+	case "physical_sync":
+		return m.openPhysicalSync()
+	case "continue_all":
+		if m.run.busy {
+			m.log("Downloads are already running.")
+			return *m, nil
+		}
+		if !m.eng.HasPending() {
+			m.log("No pending downloads.")
+			return *m, nil
+		}
+		return *m, m.download(nil)
 	case "details_albums":
 		return *m, m.setSection(secAlbums)
 	case "details_sources":
